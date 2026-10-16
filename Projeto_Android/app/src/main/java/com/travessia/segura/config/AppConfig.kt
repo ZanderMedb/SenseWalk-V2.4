@@ -32,9 +32,9 @@ class AppConfig(context: Context) {
         set(v) = prefs.edit().putBoolean("voice_auto_listen", v).apply()
 
     // ── Classes do modelo ──
-    val keywordsVeiculos      = setOf("car", "motorcycle", "bicycle", "truck", "ambulance")
+    val keywordsVeiculos      = setOf("car", "motorcycle", "bicycle", "truck", "bus")
     val keywordsFaixa         = setOf("crosswalk")
-    val keywordsSemaforoPrefixo = "traffic-light"
+    val keywordsSemaforoPrefixos = setOf("traffic-light", "pedestrian-light")
     val kwVermelho = setOf("red")
     val kwVerde    = setOf("green")
     val kwAmarelo  = setOf("yellow")
@@ -44,7 +44,7 @@ class AppConfig(context: Context) {
         "motorcycle" to "vehicle_motorcycle",
         "bicycle"    to "vehicle_bicycle",
         "truck"      to "vehicle_truck",
-        "ambulance"  to "vehicle_ambulance"
+        "bus"        to "vehicle_bus"
     )
 
     val classNames = listOf(
@@ -52,11 +52,13 @@ class AppConfig(context: Context) {
         "motorcycle",          // 1
         "bicycle",             // 2
         "truck",               // 3
-        "ambulance",           // 4
+        "bus",                 // 4
         "traffic-light-green", // 5
         "traffic-light-red",   // 6
         "traffic-light-yellow",// 7
-        "crosswalk"            // 8
+        "crosswalk",           // 8
+        "pedestrian-light-green", // 9
+        "pedestrian-light-red"    // 10
     )
 
     // ── Detecção ──
@@ -232,7 +234,7 @@ class AppConfig(context: Context) {
         return when {
             n in keywordsVeiculos            -> "veiculo"
             n in keywordsFaixa               -> "faixa"
-            n.startsWith(keywordsSemaforoPrefixo) -> "semaforo"
+            keywordsSemaforoPrefixos.any { n.startsWith(it) } -> "semaforo"
             else                             -> null
         }
     }

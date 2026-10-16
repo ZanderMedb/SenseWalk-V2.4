@@ -13,3 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
+**/.idea/
+
+# Artefatos locais de exportacao e validacao de modelos.
+Dados_IA/best.onnx*
+Dados_IA/best_saved_model/
+calibration_image_sample_data_20x128x128x3_float32.npy
+Dados_IA/dados_treinamento_ia/modelos_exportados/
+Dados_IA/dados_treinamento_ia/validacoes_videos*/
+Dados_IA/dados_treinamento_ia/videos/*
+!Dados_IA/dados_treinamento_ia/videos/.gitkeep
