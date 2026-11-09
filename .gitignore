@@ -14,6 +14,9 @@
 .cxx
 local.properties
 **/.idea/
+zip_dos_data/
+__pycache__/
+*.pyc
 
 # Artefatos locais de exportacao e validacao de modelos.
 Dados_IA/best.onnx*

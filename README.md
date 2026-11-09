@@ -54,7 +54,7 @@ Os datasets de imagens e anotações não estão incluídos. As pastas de result
 ## Recursos do aplicativo
 
 - Detecção com TensorFlow Lite e visualização das caixas dos objetos.
-- Captura pela câmera do aparelho, usando CameraX, e integração com câmera ESP32 por HTTP.
+- Captura pela câmera do aparelho, usando CameraX, e entrada experimental X5 por Wi-Fi/RTSP JPEG.
 - Rastreamento de veículos e análise de movimento, com fluxo óptico para compensação do movimento da câmera.
 - Identificação de faixas e semáforos, com lógica de estados para interpretar a cena.
 - Alertas por voz, comandos de voz e interface em português, inglês e espanhol.
@@ -114,9 +114,23 @@ O APK será gerado em `Projeto_Android/app/build/outputs/apk/debug/`.
 
 **Estado da verificação:** após a reorganização, a tentativa local de executar `gradlew --offline help` falhou no ambiente com Java `25.0.3`. A compilação após essa mudança de estrutura ainda precisa ser validada com um Gradle JDK compatível.
 
-### Câmera ESP32
+### Câmera X5 Z-IOT (experimental)
 
-O cliente implementado usa por padrão `http://192.168.4.1`. O código descreve a rede Wi-Fi da câmera como `ESP-CAM-VIEW`: conecte o celular à rede disponibilizada pela câmera antes de usar essa entrada no aplicativo. O firmware precisa fornecer os endpoints esperados por `EspCameraClient.kt`; há também uma implementação de leitura MJPEG no cliente.
+A fonte **X5** aparece junto à câmera do celular no botão de fontes. Antes de iniciar a análise, conecte manualmente o Galaxy S23 à rede aberta `ZIOTA_775012581081`; ela não oferece internet. Em Ajustes, a seção **X5 RTSP** permite mudar SSID, IP, porta de controle, URL RTSP alternativa, rotação de 180 graus e o limite para frames vencidos.
+
+Arquitetura: `X5CameraClient` abre o TCP local `192.168.1.1:8266`, envia o handshake comprovado e mantém essa sessão aberta enquanto o vídeo é usado. A resposta é limitada e validada antes de extrair a URL RTSP. O cliente negocia SDP por RTSP/TCP e só continua quando o SDP anuncia `JPEG` RTP. Os fragmentos JPEG RFC 2435 são remontados sem fila crescente e entregues ao `ExternalFrameProcessor`, portanto TensorFlow Lite, tracking, voz, overlay e benchmark permanecem únicos.
+
+Não foi adicionada biblioteca ou binário de decoder: o módulo usa apenas APIs Android, Kotlin e Coroutines já presentes. Não há licença adicional. H.264, áudio RTSP, JPEG RTP com tabelas de quantização fora do modo básico e qualquer SDP sem `JPEG` são recusados de propósito e mostrados como codec não suportado.
+
+Checklist no S23:
+
+1. Conecte-se manualmente a `ZIOTA_775012581081` e confirme que `rtsp://192.168.1.1:7070/webcam/jpeg_dvp` abre no VLC em outra máquina da mesma rede.
+2. Abra SenseWalk, selecione X5, confira a mensagem de Wi-Fi e inicie a análise.
+3. Confirme preview, rotação, caixas alinhadas, atualizações de tracking e alertas de voz.
+4. Desligue e religue a X5. O overlay deve ser limpo, o status deve voltar a verificar e a reconexão é limitada a cinco tentativas.
+5. Pare a análise ou saia da tela. A sessão TCP 8266 e o RTSP devem ser fechados.
+
+O preview experimental não comprova latência, estabilidade, FPS nem segurança de travessia. Valide em ambiente controlado e confirme o entorno antes de atravessar.
 
 ## Modelos e backup
 

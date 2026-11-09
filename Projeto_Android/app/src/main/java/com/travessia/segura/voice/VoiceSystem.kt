@@ -7,7 +7,6 @@ import android.util.Log
 import com.travessia.segura.config.AppConfig
 import com.travessia.segura.config.LanguageManager
 import java.util.Locale
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -25,7 +24,7 @@ class VoiceSystem(
     }
 
     private var tts: TextToSpeech? = null
-    private val fila    = ConcurrentLinkedQueue<String>()
+    private val fila = VoiceMessageScheduler(MAX_QUEUE)
     private val ultimos = mutableMapOf<String, Double>()
     private val falando = AtomicBoolean(false)
     private var tUltimaFala = now()
@@ -115,6 +114,11 @@ class VoiceSystem(
 
     /** Fala com cooldown. Se dentro do cooldown, ignora silenciosamente. */
     fun falar(chave: String, texto: String) {
+        falarPrioritario(chave, texto, VoicePriority.CROSSING)
+    }
+
+    /** Insere uma mensagem sem interromper uma de prioridade superior já em andamento. */
+    fun falarPrioritario(chave: String, texto: String, prioridade: VoicePriority) {
         if (!funcionando) return
         aplicarIdiomaTts()
 
@@ -122,8 +126,7 @@ class VoiceSystem(
         val cd = cooldowns[chave] ?: 3.0
         if ((agora - (ultimos[chave] ?: 0.0)) < cd) return
 
-        if (fila.size < MAX_QUEUE) {
-            fila.add(texto)
+        if (fila.offer(ScheduledVoiceMessage(chave, texto, prioridade, System.currentTimeMillis()))) {
             ultimos[chave] = agora
             tUltimaFala = agora
             processarFila()
@@ -133,10 +136,15 @@ class VoiceSystem(
 
     /** Força fala imediata — limpa tudo antes. */
     fun forcar(chave: String, texto: String) {
+        forcarPrioritario(chave, texto, VoicePriority.SAFETY)
+    }
+
+    /** Alertas críticos (ex.: semáforo vermelho) interrompem instruções de menor prioridade. */
+    fun forcarPrioritario(chave: String, texto: String, prioridade: VoicePriority) {
         if (!funcionando) { Log.d(TAG, "[VOZ!] OFF $texto"); return }
         aplicarIdiomaTts()
         limpar()
-        fila.add(texto)
+        fila.offer(ScheduledVoiceMessage(chave, texto, prioridade, System.currentTimeMillis()))
         val agora = now()
         ultimos[chave] = agora
         tUltimaFala = agora
@@ -148,11 +156,13 @@ class VoiceSystem(
 
     private fun processarFila() {
         if (falando.get()) return
-        val texto = fila.poll() ?: return
+        val mensagem = fila.poll() ?: return
         val params = android.os.Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, config.volumeVoz)
         }
-        tts?.speak(texto, TextToSpeech.QUEUE_FLUSH, params, "u_${System.currentTimeMillis()}")
+        // onStart é assíncrono; marque antes de speak para outra origem não limpar esta fala.
+        falando.set(true)
+        tts?.speak(mensagem.text, TextToSpeech.QUEUE_FLUSH, params, "u_${System.currentTimeMillis()}")
     }
 
     private fun limpar() {

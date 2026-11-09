@@ -31,6 +31,48 @@ class AppConfig(context: Context) {
         get()  = prefs.getBoolean("voice_auto_listen", false)
         set(v) = prefs.edit().putBoolean("voice_auto_listen", v).apply()
 
+    // ── Monitoramento automático / GPS ──
+    // Estas opções não alteram o modelo, as classes, nem a inferência YOLO.
+    var automaticAnalysisEnabled: Boolean
+        get() = prefs.getBoolean("automatic_analysis_enabled", true)
+        set(v) = prefs.edit().putBoolean("automatic_analysis_enabled", v).apply()
+
+    var walkingMonitoringEnabled: Boolean
+        get() = prefs.getBoolean("walking_monitoring_enabled", false)
+        set(v) = prefs.edit().putBoolean("walking_monitoring_enabled", v).apply()
+
+    var voiceNavigationEnabled: Boolean
+        get() = prefs.getBoolean("voice_navigation_enabled", true)
+        set(v) = prefs.edit().putBoolean("voice_navigation_enabled", v).apply()
+
+    var crossingAlertDistanceMeters: Int
+        get() = prefs.getInt("crossing_alert_distance_m", 30).coerceIn(10, 80)
+        set(v) = prefs.edit().putInt("crossing_alert_distance_m", v.coerceIn(10, 80)).apply()
+
+    var crossingQueryRadiusMeters: Int
+        get() = prefs.getInt("crossing_query_radius_m", 100).coerceIn(50, 250)
+        set(v) = prefs.edit().putInt("crossing_query_radius_m", v.coerceIn(50, 250)).apply()
+
+    var locationUpdateIntervalSeconds: Int
+        get() = prefs.getInt("location_update_interval_s", 8).coerceIn(3, 60)
+        set(v) = prefs.edit().putInt("location_update_interval_s", v.coerceIn(3, 60)).apply()
+
+    var maximumLocationAccuracyMeters: Float
+        get() = prefs.getFloat("maximum_location_accuracy_m", 35f).coerceIn(10f, 100f)
+        set(v) = prefs.edit().putFloat("maximum_location_accuracy_m", v.coerceIn(10f, 100f)).apply()
+
+    var automaticAnalysisCooldownSeconds: Int
+        get() = prefs.getInt("automatic_analysis_cooldown_s", 90).coerceIn(30, 300)
+        set(v) = prefs.edit().putInt("automatic_analysis_cooldown_s", v.coerceIn(30, 300)).apply()
+
+    var crossingExitHysteresisMeters: Int
+        get() = prefs.getInt("crossing_exit_hysteresis_m", 15).coerceIn(5, 50)
+        set(v) = prefs.edit().putInt("crossing_exit_hysteresis_m", v.coerceIn(5, 50)).apply()
+
+    var automaticAnalysisDurationSeconds: Int
+        get() = prefs.getInt("automatic_analysis_duration_s", 45).coerceIn(15, 120)
+        set(v) = prefs.edit().putInt("automatic_analysis_duration_s", v.coerceIn(15, 120)).apply()
+
     // ── Classes do modelo ──
     val keywordsVeiculos      = setOf("car", "motorcycle", "bicycle", "truck", "bus")
     val keywordsFaixa         = setOf("crosswalk")
@@ -199,14 +241,6 @@ class AppConfig(context: Context) {
 
     // ── Aparência / Interface ──
     // Essas opções mudam apenas a aparência do app, sem alterar a lógica da IA.
-    var espPreviewTelaCheia: Boolean
-        get()  = prefs.getBoolean("esp_preview_tela_cheia", true)
-        set(v) = prefs.edit().putBoolean("esp_preview_tela_cheia", v).apply()
-
-    var espPreviewRotation: Int
-        get()  = prefs.getInt("esp_preview_rotation", 0)
-        set(v) = prefs.edit().putInt("esp_preview_rotation", v).apply()
-
     var mostrarOverlay: Boolean
         get()  = prefs.getBoolean("mostrar_overlay", true)
         set(v) = prefs.edit().putBoolean("mostrar_overlay", v).apply()

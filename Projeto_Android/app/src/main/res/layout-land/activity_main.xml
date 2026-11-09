@@ -14,7 +14,7 @@
         android:visibility="visible" />
 
     <ImageView
-        android:id="@+id/espImageView"
+        android:id="@+id/externalImageView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:importantForAccessibility="no"
@@ -225,6 +225,18 @@
                 android:layout_marginEnd="7dp"
                 android:background="@drawable/bg_button_secondary"
                 android:text="Voz"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFFFF"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnNavigation"
+                android:fontFamily="sans-serif-medium"
+                android:layout_width="88dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="7dp"
+                android:background="@drawable/bg_button_secondary"
+                android:text="Navegar"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFFFF"
                 android:textSize="12sp" />

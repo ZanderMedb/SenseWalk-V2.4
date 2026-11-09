@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Localização apenas em primeiro plano: o app não solicita localização em segundo plano. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -23,12 +27,10 @@
         </intent>
     </queries>
 
-    <!-- ESP32 usa HTTP local, por isso cleartext continua habilitado. -->
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
-        android:theme="@style/Theme.AppCompat.Light.NoActionBar"
-        android:usesCleartextTraffic="true">
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
 
         <!-- A escolha inicial de idioma fica sempre em pe. -->
         <activity
@@ -51,6 +53,17 @@
             android:name=".ui.SettingsActivity"
             android:exported="false"
             android:screenOrientation="sensorLandscape" />
+
+        <activity
+            android:name=".ui.NavigationActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- Entrega atualizações da Activity Recognition API enquanto o monitoramento
+             explicitamente iniciado pelo usuário estiver ativo. -->
+        <receiver
+            android:name=".context.ActivityRecognitionReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

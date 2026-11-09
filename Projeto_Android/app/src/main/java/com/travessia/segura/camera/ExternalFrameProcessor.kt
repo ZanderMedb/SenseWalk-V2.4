@@ -13,8 +13,8 @@ import com.travessia.segura.tracking.Rastreador
 import com.travessia.segura.ui.OverlayView
 import com.travessia.segura.vision.SparseOpticalFlowEstimator
 
-/** Processa frames da câmera externa usando o mesmo pipeline V2.4 da câmera local. */
-class EspFrameProcessor(
+/** Processes external camera frames through the same vision pipeline as CameraX. */
+class ExternalFrameProcessor(
     private val config: AppConfig,
     private val detector: YoloDetector,
     private val vehicleTracker: AdvancedVehicleTracker,
@@ -25,22 +25,22 @@ class EspFrameProcessor(
     private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int) -> Unit
 ) {
     companion object {
-        private const val TAG = "EspFrameProcessor"
+        private const val TAG = "ExternalFrameProcessor"
     }
 
     private var frameCount = 0L
     private val opticalFlow = SparseOpticalFlowEstimator()
 
-    fun processarFrame(bitmap: Bitmap) {
+    fun processarFrame(bitmap: Bitmap, overlayRotation: Int = 0) {
         if (stateMachine.estado == AppConfig.EST_INATIVO || !detector.isReady) return
         try {
-            processarInterno(bitmap)
+            processarInterno(bitmap, overlayRotation)
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao processar frame externo: ${e.message}", e)
         }
     }
 
-    private fun processarInterno(bitmap: Bitmap) {
+    private fun processarInterno(bitmap: Bitmap, overlayRotation: Int) {
         val frameStarted = SystemClock.elapsedRealtimeNanos()
         frameCount++
         val timestampMs = System.currentTimeMillis()
@@ -168,7 +168,7 @@ class EspFrameProcessor(
             )
         }
 
-        onOverlayUpdate(overlayBoxes, wf, hf, config.espPreviewRotation)
+        onOverlayUpdate(overlayBoxes, wf, hf, overlayRotation)
 
         stateMachine.processar(
             veiculosReais = veiculos,

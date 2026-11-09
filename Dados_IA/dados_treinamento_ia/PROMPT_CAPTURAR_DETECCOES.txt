@@ -1,0 +1,40 @@
+Crie e execute um script Python em Dados_IA/dados_treinamento_ia para analisar um video por vez com o modelo TFLite novo.
+
+Contexto:
+- Use o modelo novo: modelos_exportados/best_dynamic.tflite.
+- Nao use Dados_IA/backup/model.tflite.
+- O modelo novo e o mesmo arquivo do Android em Projeto_Android/app/src/main/assets/model.tflite.
+- Reutilize, quando possivel, as funcoes de validar_videos_tflite.py.
+- O ambiente pode nao ter ai_edge_litert; mantenha fallback para tensorflow.lite.python.interpreter.Interpreter.
+- OpenCV e usado para video e imagens.
+
+Requisitos:
+1. Crie um script chamado capturar_deteccoes_tflite.py.
+2. O script deve receber exatamente um video via --video.
+3. Para cada frame processado que tiver uma ou mais deteccoes acima da confianca configurada:
+   - desenhar caixas, classes e confiancas;
+   - salvar uma imagem JPG anotada;
+   - nao salvar imagens de frames sem deteccoes.
+4. Criar uma pasta de saida separada por video, sem sobrescrever resultados anteriores.
+5. Salvar um resumo JSON com:
+   - modelo usado;
+   - video usado;
+   - FPS, resolucao e frames processados;
+   - quantidade de deteccoes;
+   - quantidade de imagens salvas;
+   - deteccoes por classe;
+   - caminhos das imagens salvas.
+6. Salvar tambem um CSV com frame, timestamp, classe, confianca e bounding box.
+7. Validar modelo, video, extensao, confianca, IoU, stride, tensor de entrada e saida, e abertura da camera/arquivo.
+8. Execute no video:
+   videos/WhatsApp Video 2026-10-15 at 21.05.25.mp4
+   com --stride 1, --confidence 0.25 e --iou 0.45.
+9. Use uma pasta de resultado nova, por exemplo:
+   capturas_deteccoes_teste
+10. Ao terminar, informe:
+   - os arquivos gerados;
+   - quantidade de imagens salvas;
+   - classes detectadas;
+   - caminho do resumo JSON;
+   - se nao houver deteccoes, informe claramente e nao invente resultados.
+11. Faca verificacao de sintaxe e valide que os arquivos de saida existem.

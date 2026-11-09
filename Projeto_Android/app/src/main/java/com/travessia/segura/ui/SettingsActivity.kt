@@ -18,6 +18,7 @@ import com.travessia.segura.config.LanguageManager
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var config: AppConfig
+    private lateinit var x5Config: com.travessia.segura.camera.X5CameraConfig
     private lateinit var container: LinearLayout
 
     private val dp: Float
@@ -31,6 +32,7 @@ class SettingsActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         config = AppConfig(this)
+        x5Config = com.travessia.segura.camera.X5CameraConfig(this)
 
         val scrollView = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#050B18"))
@@ -76,13 +78,42 @@ class SettingsActivity : AppCompatActivity() {
             config.voiceAutoListen = it
         }
 
+        addSection(tr("settings_navigation_section"), tr("settings_navigation_subtitle"))
+        addSwitch(tr("settings_auto_analysis"), config.automaticAnalysisEnabled) {
+            config.automaticAnalysisEnabled = it
+        }
+        addSwitch(tr("settings_walking_monitoring"), config.walkingMonitoringEnabled) {
+            config.walkingMonitoringEnabled = it
+        }
+        addSwitch(tr("settings_voice_navigation"), config.voiceNavigationEnabled) {
+            config.voiceNavigationEnabled = it
+        }
+        addSliderInt(
+            tr("settings_crossing_alert_distance"),
+            config.crossingAlertDistanceMeters,
+            10,
+            80
+        ) { config.crossingAlertDistanceMeters = it }
+        addSliderInt(
+            tr("settings_location_frequency"),
+            config.locationUpdateIntervalSeconds,
+            3,
+            60
+        ) { config.locationUpdateIntervalSeconds = it }
+        addSliderInt(
+            tr("settings_crossing_hysteresis"),
+            config.crossingExitHysteresisMeters,
+            5,
+            50
+        ) { config.crossingExitHysteresisMeters = it }
+        addSliderInt(
+            tr("settings_auto_cooldown"),
+            config.automaticAnalysisCooldownSeconds,
+            30,
+            300
+        ) { config.automaticAnalysisCooldownSeconds = it }
+
         addSection(tr("settings_appearance_section"), tr("settings_appearance_subtitle"))
-        addSwitch(tr("settings_esp_fullscreen"), config.espPreviewTelaCheia) {
-            config.espPreviewTelaCheia = it
-        }
-        addSpinnerInt(tr("settings_esp_rotation"), config.espPreviewRotation, listOf(0, 90, 180, 270)) {
-            config.espPreviewRotation = it
-        }
         addSwitch(tr("settings_show_boxes"), config.mostrarOverlay) {
             config.mostrarOverlay = it
         }
@@ -91,6 +122,18 @@ class SettingsActivity : AppCompatActivity() {
         }
         addSwitch(tr("settings_show_bottom_panel"), config.mostrarPainelInferior) {
             config.mostrarPainelInferior = it
+        }
+
+        addSection("X5 RTSP (EXPERIMENTAL)", "Conecte manualmente ao Wi-Fi da X5. Esta fonte não confirma segurança para travessia.")
+        addTextInput("SSID da X5", x5Config.ssid) { x5Config.ssid = it }
+        addTextInput("IP da X5", x5Config.controlHost) { x5Config.controlHost = it }
+        addTextInput("Porta de controle X5", x5Config.controlPort.toString()) {
+            it.toIntOrNull()?.let { port -> x5Config.controlPort = port }
+        }
+        addTextInput("URL RTSP alternativa", x5Config.fallbackRtspUrl) { x5Config.fallbackRtspUrl = it }
+        addSwitch("Girar imagem X5 em 180°", x5Config.rotate180) { x5Config.rotate180 = it }
+        addTextInput("Limite de frame X5 (ms)", x5Config.staleFrameMs.toString()) {
+            it.toLongOrNull()?.let { ms -> x5Config.staleFrameMs = ms }
         }
 
         addSection(tr("settings_ai_section"), tr("settings_ai_subtitle"))
@@ -431,6 +474,27 @@ class SettingsActivity : AppCompatActivity() {
         ).apply {
             topMargin = dpInt(8)
         })
+    }
+
+    private fun addTextInput(label: String, initialValue: String, onChange: (String) -> Unit) {
+        val box = controlBox()
+        box.addView(TextView(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, dpInt(8))
+        })
+        box.addView(EditText(this).apply {
+            setText(initialValue)
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setSingleLine(true)
+            contentDescription = label
+            setOnFocusChangeListener { _, hasFocus ->
+                if (!hasFocus) onChange(text.toString().trim())
+            }
+        })
+        container.addView(box)
     }
 
     private fun addResetButton() {

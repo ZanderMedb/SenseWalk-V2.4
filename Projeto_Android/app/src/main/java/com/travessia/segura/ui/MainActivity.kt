@@ -2,10 +2,12 @@ package com.travessia.segura.ui
 
 import android.Manifest
 import android.content.Intent
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
+import android.os.SystemClock
 import android.speech.SpeechRecognizer
 import android.util.Log
 import android.view.WindowManager
@@ -20,9 +22,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.travessia.segura.R
-import com.travessia.segura.camera.EspCameraClient
-import com.travessia.segura.camera.EspFrameProcessor
+import com.travessia.segura.camera.ExternalFrameProcessor
 import com.travessia.segura.camera.FrameAnalyzer
+import com.travessia.segura.camera.VideoFrame
+import com.travessia.segura.camera.X5CameraClient
+import com.travessia.segura.camera.X5CameraConfig
+import com.travessia.segura.camera.X5Protocol
+import com.travessia.segura.camera.X5StreamState
 import com.travessia.segura.config.AppConfig
 import com.travessia.segura.config.LanguageManager
 import com.travessia.segura.config.AppConfig.Companion.EST_INATIVO
@@ -34,6 +40,18 @@ import com.travessia.segura.logic.StateMachine
 import com.travessia.segura.tracking.Rastreador
 import com.travessia.segura.voice.VoiceSystem
 import com.travessia.segura.voice.VoiceCommandController
+import com.travessia.segura.voice.VoiceNavigationManager
+import com.travessia.segura.context.CrossingAnalysisCoordinator
+import com.travessia.segura.context.MonitoringState
+import com.travessia.segura.navigation.CrossingMapRepository
+import com.travessia.segura.navigation.DestinationPlace
+import com.travessia.segura.navigation.GeoPoint
+import com.travessia.segura.navigation.GraphHopperRouteRepository
+import com.travessia.segura.navigation.LocationSnapshot
+import com.travessia.segura.navigation.NavigationManager
+import com.travessia.segura.navigation.NavigationSessionStore
+import com.travessia.segura.navigation.PedestrianRoute
+import com.travessia.segura.location.LocationService
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -51,10 +69,11 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         private const val CAMERA_PERMISSION_CODE = 100
         private const val MICROPHONE_PERMISSION_CODE = 101
+        private const val MONITORING_PERMISSION_CODE = 102
 
         // Modos de câmera
         const val MODE_LOCAL_CAMERA = 0
-        const val MODE_ESP32_CAMERA = 1
+        const val MODE_X5_CAMERA = 1
     }
 
     // UI
@@ -71,11 +90,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConfig: Button
     private lateinit var btnSource: Button
     private lateinit var btnVoice: Button
+    private lateinit var btnNavigation: Button
     private lateinit var statusBar: View
     private lateinit var bottomPanel: View
 
-    // ImageView para exibir frames do ESP32 (alternativa ao PreviewView)
-    private var espImageView: ImageView? = null
+    private var externalImageView: ImageView? = null
 
     // Engine
     private lateinit var config: AppConfig
@@ -87,23 +106,33 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stateMachine: StateMachine
     private lateinit var benchmarkLogger: BenchmarkLogger
     private lateinit var cameraExecutor: ExecutorService
+    private val activityScope = MainScope()
+    private var crossingCoordinator: CrossingAnalysisCoordinator? = null
+    private var foregroundNavigationManager: NavigationManager? = null
+    private var foregroundNavigationRoute: PedestrianRoute? = null
 
     // CameraX (modo local)
     private var frameAnalyzer: FrameAnalyzer? = null
 
-    // ESP32 (modo externo)
-    private var espClient: EspCameraClient? = null
-    private var espProcessor: EspFrameProcessor? = null
-    private var processingScope: CoroutineScope? = null
-    private var espFrameChannel: Channel<Bitmap>? = null
+    private var externalProcessor: ExternalFrameProcessor? = null
+
+    // X5 RTSP (experimental). It reuses the external processor, so no second detector exists.
+    private lateinit var x5Config: X5CameraConfig
+    private var x5Client: X5CameraClient? = null
+    private var x5Scope: CoroutineScope? = null
+    private var x5FrameChannel: Channel<VideoFrame>? = null
+    @Volatile private var lastX5FrameNanos = 0L
+    @Volatile private var x5StaleReported = false
 
     // Estado
     private var isActive = false
-    private var cameraMode = MODE_LOCAL_CAMERA // câmera local por padrão para validar a IA sem depender do ESP32
+    private var cameraMode = MODE_LOCAL_CAMERA
     private var lastVehicleCount = 0
     private var lastSituation = "VERIFICANDO"
     private var autoListenTriggered = false
     private var pendingVoiceStart = false
+    private var pendingAutomaticStart = false
+    private var analysisStartedAutomatically = false
 
     // FPS
     private var frameCount = 0
@@ -138,6 +167,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         config = AppConfig(this)
+        x5Config = X5CameraConfig(this)
         benchmarkLogger = BenchmarkLogger(this)
         initViews()
         aplicarInsetsSistema()
@@ -159,11 +189,11 @@ class MainActivity : AppCompatActivity() {
         btnConfig = findViewById(R.id.btnConfig)
         btnSource = findViewById(R.id.btnSource)
         btnVoice = findViewById(R.id.btnVoice)
+        btnNavigation = findViewById(R.id.btnNavigation)
         statusBar = findViewById(R.id.statusBar)
         bottomPanel = findViewById(R.id.bottomPanel)
 
-        // ImageView para ESP32 frames (adicionada programaticamente ou via layout)
-        espImageView = findViewById(R.id.espImageView)
+        externalImageView = findViewById(R.id.externalImageView)
 
         btnToggle.isEnabled = false
         btnToggle.setOnClickListener { toggleAnalysis() }
@@ -172,6 +202,9 @@ class MainActivity : AppCompatActivity() {
         }
         btnSource.setOnClickListener { alternarFonte() }
         btnVoice.setOnClickListener { startVoiceCommand() }
+        btnNavigation.setOnClickListener {
+            startActivity(Intent(this, NavigationActivity::class.java))
+        }
 
         tvAlertStatus.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         tvEstado.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -187,6 +220,77 @@ class MainActivity : AppCompatActivity() {
     private fun initEngine() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         voz = VoiceSystem(this, config)
+        crossingCoordinator = CrossingAnalysisCoordinator(
+            context = this,
+            config = config,
+            scope = activityScope,
+            repository = CrossingMapRepository(),
+            voice = VoiceNavigationManager(config, voz),
+            listener = object : CrossingAnalysisCoordinator.Listener {
+                override fun onMonitoringState(state: MonitoringState) {
+                    runOnUiThread {
+                        if (!isActive) tvAlertStatus.text = when (state) {
+                            MonitoringState.STOPPED -> "Monitoramento automático desligado"
+                            MonitoringState.STATIONARY -> "Monitoramento: usuário parado"
+                            MonitoringState.WALKING -> "Monitoramento: caminhando"
+                            MonitoringState.POSSIBLE_CROSSING -> "Possível travessia mapeada"
+                            MonitoringState.ANALYSING_CROSSING -> "IA analisando travessia"
+                        }
+                    }
+                }
+
+                override fun onLocationStatus(message: String) {
+                    runOnUiThread { tvInfo.text = message }
+                }
+
+                override fun startCrossingAnalysis() {
+                    runOnUiThread {
+                        if (!isActive) {
+                            if (btnToggle.isEnabled) {
+                                analysisStartedAutomatically = true
+                                setAnalysisActive(true, automatic = true)
+                            } else {
+                                pendingAutomaticStart = true
+                            }
+                        }
+                    }
+                }
+
+                override fun stopCrossingAnalysis() {
+                    runOnUiThread {
+                        if (isActive && analysisStartedAutomatically) setAnalysisActive(false, automatic = true)
+                    }
+                }
+            },
+            activeRoute = { NavigationSessionStore.currentRoute }
+        )
+        foregroundNavigationManager = NavigationManager(
+            locationService = LocationService(this, config),
+            voice = VoiceNavigationManager(config, voz),
+            routeRepository = GraphHopperRouteRepository(),
+            listener = object : NavigationManager.Listener {
+                override fun onStatus(message: String) {
+                    runOnUiThread { tvInfo.text = message }
+                }
+
+                override fun onRoute(route: PedestrianRoute) {
+                    foregroundNavigationRoute = route
+                }
+
+                override fun onLocation(snapshot: LocationSnapshot) = Unit
+
+                override fun onRecalculateRequested(origin: GeoPoint, destination: DestinationPlace) {
+                    activityScope.launch {
+                        GraphHopperRouteRepository().route(origin, destination).onSuccess { route ->
+                            foregroundNavigationManager?.setRoute(route)
+                            VoiceNavigationManager(config, voz).navigation("route_recalculated", "Rota recalculada.")
+                        }.onFailure {
+                            runOnUiThread { tvInfo.text = "Não foi possível recalcular a rota: ${it.message}" }
+                        }
+                    }
+                }
+            }
+        )
 
         Thread {
             detector = YoloDetector(
@@ -205,8 +309,7 @@ class MainActivity : AppCompatActivity() {
                     rastreador = Rastreador(config)
                     stateMachine = StateMachine(config, voz, rastreador)
 
-                    // Preparar processador para ESP32
-                    espProcessor = EspFrameProcessor(
+                    externalProcessor = ExternalFrameProcessor(
                         config = config,
                         detector = detector,
                         vehicleTracker = vehicleTracker,
@@ -252,6 +355,11 @@ class MainActivity : AppCompatActivity() {
                     if (pendingVoiceStart) {
                         pendingVoiceStart = false
                         setAnalysisActive(true)
+                    }
+                    if (pendingAutomaticStart) {
+                        pendingAutomaticStart = false
+                        analysisStartedAutomatically = true
+                        setAnalysisActive(true, automatic = true)
                     }
 
                 } else {
@@ -348,7 +456,7 @@ class MainActivity : AppCompatActivity() {
 
             VoiceCommandController.Command.STATUS -> falarStatus()
             VoiceCommandController.Command.SOURCE_PHONE -> selecionarFontePorVoz(MODE_LOCAL_CAMERA)
-            VoiceCommandController.Command.SOURCE_EXTERNAL -> selecionarFontePorVoz(MODE_ESP32_CAMERA)
+            VoiceCommandController.Command.SOURCE_EXTERNAL -> selecionarFontePorVoz(MODE_X5_CAMERA)
 
             VoiceCommandController.Command.SETTINGS -> {
                 if (isActive) setAnalysisActive(false)
@@ -398,22 +506,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        cameraMode = if (cameraMode == MODE_LOCAL_CAMERA) MODE_ESP32_CAMERA else MODE_LOCAL_CAMERA
+        cameraMode = if (cameraMode == MODE_LOCAL_CAMERA) MODE_X5_CAMERA else MODE_LOCAL_CAMERA
         atualizarUIFonte()
         configurarFonte()
     }
 
     private fun atualizarUIFonte() {
         when (cameraMode) {
-            MODE_ESP32_CAMERA -> {
-                btnSource.text = "ESP32"
+            MODE_X5_CAMERA -> {
+                btnSource.text = "X5"
                 previewView.visibility = View.GONE
-                espImageView?.visibility = View.VISIBLE
+                externalImageView?.visibility = View.VISIBLE
             }
             MODE_LOCAL_CAMERA -> {
                 btnSource.text = tr("source_local")
                 previewView.visibility = View.VISIBLE
-                espImageView?.visibility = View.GONE
+                externalImageView?.visibility = View.GONE
             }
         }
     }
@@ -421,7 +529,7 @@ class MainActivity : AppCompatActivity() {
     private fun configurarFonte() {
         aplicarPreferenciasVisuais()
         when (cameraMode) {
-            MODE_ESP32_CAMERA -> configurarEsp32()
+            MODE_X5_CAMERA -> configurarX5()
             MODE_LOCAL_CAMERA -> configurarCameraLocal()
         }
     }
@@ -475,11 +583,7 @@ class MainActivity : AppCompatActivity() {
     private fun aplicarPreferenciasVisuais() {
         if (!::config.isInitialized) return
 
-        espImageView?.scaleType = if (config.espPreviewTelaCheia) {
-            ImageView.ScaleType.CENTER_CROP
-        } else {
-            ImageView.ScaleType.FIT_CENTER
-        }
+        externalImageView?.scaleType = ImageView.ScaleType.CENTER_CROP
 
         overlayView.visibility = if (config.mostrarOverlay) View.VISIBLE else View.GONE
         statusBar.visibility = if (config.mostrarPainelSuperior) View.VISIBLE else View.GONE
@@ -498,6 +602,7 @@ class MainActivity : AppCompatActivity() {
         btnSource.contentDescription = tr("accessibility_source")
         btnVoice.contentDescription = tr("voice_button_description")
         btnConfig.contentDescription = tr("accessibility_settings")
+        btnNavigation.contentDescription = "Abrir navegação acessível"
 
         if (!isActive) {
             tvAlertStatus.text = tr("waiting_camera")
@@ -505,25 +610,6 @@ class MainActivity : AppCompatActivity() {
             tvSituacao.text = "---"
             tvDetectionCount.text = "${tr("vehicles")}: 0"
         }
-    }
-
-    private fun prepararBitmapPreview(bitmap: Bitmap): Bitmap {
-        val rotation = config.espPreviewRotation
-        if (rotation == 0) return bitmap
-
-        val matrix = Matrix().apply {
-            postRotate(rotation.toFloat())
-        }
-
-        return Bitmap.createBitmap(
-            bitmap,
-            0,
-            0,
-            bitmap.width,
-            bitmap.height,
-            matrix,
-            true
-        )
     }
 
     override fun onResume() {
@@ -538,110 +624,129 @@ class MainActivity : AppCompatActivity() {
                     ghostFrameCount = config.trackerGhostFrames
                 )
             }
+            resumeNavigationInMain()
+            startAutomaticMonitoring()
 
-            if (config.voiceCommandsEnabled && config.voiceAutoListen && !autoListenTriggered &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-            ) {
-                autoListenTriggered = true
-                window.decorView.postDelayed({ startVoiceCommand() }, 700L)
-            }
+            // Temporarily disabled during X5 diagnostics; manual voice activation remains available.
+            // if (config.voiceCommandsEnabled && config.voiceAutoListen && !autoListenTriggered &&
+            //     ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            // ) {
+            //     autoListenTriggered = true
+            //     window.decorView.postDelayed({ startVoiceCommand() }, 700L)
+            // }
         }
     }
 
     // ================================================================
-    //  ESP32 CAMERA
+    //  X5 RTSP CAMERA (JPEG/RTP experimental)
     // ================================================================
 
-    private fun configurarEsp32() {
-        // Parar câmera local se estiver rodando
+    private fun configurarX5() {
         pararCameraLocal()
+        val wifiManager = getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        val connectedSsid = wifiManager.connectionInfo?.ssid?.trim('"').orEmpty()
+        tvInfo.text = if (connectedSsid.isNotBlank() && connectedSsid != "<unknown ssid>" && connectedSsid != x5Config.ssid) {
+            "X5 experimental: conecte manualmente ao Wi-Fi '${x5Config.ssid}' (atual: $connectedSsid)."
+        } else {
+            "X5 experimental: conecte manualmente ao Wi-Fi '${x5Config.ssid}' (sem internet)."
+        }
+        tvAlertStatus.text = "X5 desligada"
 
-        tvInfo.text = tr("esp_connect_info")
-
-        espClient = EspCameraClient(
-            baseUrl = "http://192.168.4.1",
-            frameEndpoint = "/frame", // Ajuste conforme seu firmware do ESP32
-            onFrame = { bitmap ->
-                // Aparência do preview: tela cheia/rotação visual.
-                // A IA continua processando o bitmap original para não mudar a lógica.
-                val previewBitmap = prepararBitmapPreview(bitmap)
-                espImageView?.scaleType = if (config.espPreviewTelaCheia) {
-                    ImageView.ScaleType.CENTER_CROP
-                } else {
-                    ImageView.ScaleType.FIT_CENTER
-                }
-                espImageView?.setImageBitmap(previewBitmap)
-
-                // V2.1: latest-frame-wins.
-                // Nunca cria uma coroutine por frame. O canal mantém no máximo 1 frame
-                // aguardando; se chegar outro, o antigo é descartado.
-                if (isActive) {
-                    espFrameChannel?.trySend(bitmap)
-                }
-            },
-            onError = { msg ->
-                // Falha de câmera nunca pode deixar um "SEGURO" antigo visível.
-                tvInfo.text = "ESP32: $msg\n${tr("esp_error_suffix")}"
-                tvAlertStatus.text = tr("esp_waiting")
-                tvEstado.text = tr("state_recognizing")
-                tvSituacao.text = situacaoExibida("VERIFICANDO")
-                tvSituacao.setTextColor(0xFFFFAA00.toInt())
-                overlayView.clear()
-            },
-            onFpsUpdate = { fps ->
-                tvFps.text = "$fps FPS"
-            }
+        val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        x5Client = X5CameraClient(
+            connectivityManager = connectivity,
+            config = x5Config,
+            onFrame = { frame -> receberFrameX5(frame) },
+            onStateChanged = { state, message -> atualizarEstadoX5(state, message) },
+            onFpsUpdate = { fps -> runOnUiThread { tvFps.text = "$fps FPS" } }
         )
     }
 
-    private fun iniciarEsp32() {
-        pararEsp32()
-
-        processingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        espFrameChannel = Channel(
-            capacity = 1,
-            onBufferOverflow = BufferOverflow.DROP_OLDEST
-        )
-
-        // Consumidor único: garante somente UMA inferência por vez.
-        // Enquanto a IA processa, o canal conserva apenas o frame mais recente.
-        val channel = espFrameChannel
-        processingScope?.launch {
-            if (channel != null) {
-                for (bitmap in channel) {
-                    if (!isActive) continue
-                    espProcessor?.processarFrame(bitmap)
-                }
-            }
+    private fun receberFrameX5(frame: VideoFrame) {
+        val bitmap = if (frame.rotationDegrees == 0) {
+            frame.bitmap
+        } else {
+            val matrix = Matrix().apply { postRotate(frame.rotationDegrees.toFloat()) }
+            Bitmap.createBitmap(frame.bitmap, 0, 0, frame.bitmap.width, frame.bitmap.height, matrix, true)
+                .also { frame.bitmap.recycle() }
         }
+        val normalized = VideoFrame(bitmap, frame.timestampNanos, 0)
+        lastX5FrameNanos = normalized.timestampNanos
+        x5StaleReported = false
+        runOnUiThread {
+            if (cameraMode == MODE_X5_CAMERA) externalImageView?.setImageBitmap(bitmap)
+        }
+        if (isActive && cameraMode == MODE_X5_CAMERA) x5FrameChannel?.trySend(normalized)
+    }
 
-        // Testar conexão antes de iniciar a captura.
-        processingScope?.launch {
-            val conectado = espClient?.testarConexao() ?: false
-            withContext(Dispatchers.Main) {
-                if (conectado && isActive) {
-                    tvInfo.text = tr("esp_connected")
-                    espClient?.iniciar()
-                } else if (!conectado) {
-                    tvInfo.text = tr("esp_connection_failed")
-                    tvAlertStatus.text = tr("esp_no_signal")
-                    this@MainActivity.isActive = false
-                    benchmarkLogger.stopSession()
-                    btnToggle.text = tr("start")
-                    stateMachine.entrarEstado(EST_INATIVO)
-                    pararEsp32()
-                }
-            }
+    private fun atualizarEstadoX5(state: X5StreamState, message: String) {
+        if (cameraMode != MODE_X5_CAMERA) return
+        tvInfo.text = message
+        when (state) {
+            X5StreamState.ERRO -> invalidarVideoExterno("X5 sem sinal")
+            X5StreamState.RECONECTANDO -> tvAlertStatus.text = "X5 reconectando"
+            X5StreamState.REPRODUZINDO -> tvAlertStatus.text = "X5 experimental em reprodução"
+            else -> Unit
         }
     }
 
-    private fun pararEsp32() {
-        espClient?.parar()
-        espFrameChannel?.close()
-        espFrameChannel = null
-        processingScope?.cancel()
-        processingScope = null
-        espProcessor?.resetar()
+    private fun iniciarX5() {
+        pararX5()
+        lastX5FrameNanos = 0L
+        x5StaleReported = false
+        x5FrameChannel = Channel(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        x5Scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val channel = x5FrameChannel
+        x5Scope?.launch {
+            if (channel != null) for (frame in channel) {
+                if (!isActive || cameraMode != MODE_X5_CAMERA) continue
+                if (X5Protocol.isStale(frame.timestampNanos, SystemClock.elapsedRealtimeNanos(), x5Config.staleFrameMs)) {
+                    withContext(Dispatchers.Main) { invalidarVideoExterno("Frame X5 vencido") }
+                    continue
+                }
+                // The bitmap was rotated exactly once before preview and inference.
+                externalProcessor?.processarFrame(frame.bitmap, overlayRotation = 0)
+            }
+        }
+        x5Scope?.launch {
+            while (isActive && cameraMode == MODE_X5_CAMERA) {
+                delay(500L)
+                if (lastX5FrameNanos != 0L && X5Protocol.isStale(
+                        lastX5FrameNanos, SystemClock.elapsedRealtimeNanos(), x5Config.staleFrameMs
+                    )
+                ) {
+                    if (!x5StaleReported) {
+                        x5StaleReported = true
+                        Log.w(TAG, "X5 frame became stale after ${x5Config.staleFrameMs}ms")
+                        withContext(Dispatchers.Main) { invalidarVideoExterno("X5 sem frames recentes") }
+                    }
+                }
+            }
+        }
+        x5Client?.start()
+    }
+
+    private fun pararX5() {
+        x5Client?.stop()
+        x5FrameChannel?.close()
+        x5FrameChannel = null
+        x5Scope?.cancel()
+        x5Scope = null
+        lastX5FrameNanos = 0L
+        x5StaleReported = false
+    }
+
+    private fun invalidarVideoExterno(reason: String) {
+        if (cameraMode != MODE_X5_CAMERA) return
+        overlayView.clear()
+        externalProcessor?.resetar()
+        if (::stateMachine.isInitialized && isActive) stateMachine.entrarEstado(EST_RECONHECENDO)
+        lastVehicleCount = 0
+        lastSituation = "VERIFICANDO"
+        tvDetectionCount.text = "${tr("vehicles")}: 0"
+        tvSituacao.text = situacaoExibida("VERIFICANDO")
+        tvSituacao.setTextColor(0xFFFFAA00.toInt())
+        tvAlertStatus.text = reason
     }
 
     // ================================================================
@@ -649,7 +754,7 @@ class MainActivity : AppCompatActivity() {
     // ================================================================
 
     private fun configurarCameraLocal() {
-        pararEsp32()
+        pararX5()
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED
@@ -703,6 +808,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao iniciar camera: ${e.message}")
                 tvInfo.text = "${tr("camera_error")}: ${e.message}"
+                if (::voz.isInitialized) voz.forcar("camera_failure", "Câmera indisponível. Não foi possível avaliar o ambiente.")
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -712,38 +818,40 @@ class MainActivity : AppCompatActivity() {
     // ================================================================
 
     private fun toggleAnalysis() {
-        setAnalysisActive(!isActive)
+        setAnalysisActive(!isActive, automatic = false)
     }
 
-    private fun setAnalysisActive(active: Boolean) {
+    private fun setAnalysisActive(active: Boolean, automatic: Boolean = false) {
         if (active == isActive) return
         isActive = active
 
         if (isActive) {
+            analysisStartedAutomatically = automatic
             if (config.benchmarkEnabled) {
-                val source = if (cameraMode == MODE_ESP32_CAMERA) "external" else "phone"
+                val source = if (cameraMode == MODE_LOCAL_CAMERA) "phone" else "x5_rtsp"
                 benchmarkLogger.startSession(source)
             }
             // Começar cada sessão sem IDs/histórico herdados da sessão anterior.
             frameAnalyzer?.resetar()
-            espProcessor?.resetar()
+            externalProcessor?.resetar()
             stateMachine.entrarEstado(EST_RECONHECENDO)
-            voz.forcar("inicio", tr("analysis_start_voice"))
+            // A fala de contexto já informou a ativação automática; não a interrompa.
+            if (!automatic) voz.forcar("inicio", tr("analysis_start_voice"))
             btnToggle.text = tr("stop")
             btnToggle.contentDescription = tr("accessibility_stop")
             tvAlertStatus.text = tr("analysis_running")
             overlayView.clear()
 
             when (cameraMode) {
-                MODE_ESP32_CAMERA -> iniciarEsp32()
+                MODE_X5_CAMERA -> iniciarX5()
                 MODE_LOCAL_CAMERA -> tvInfo.text = tr("analyzing")
             }
 
-            Log.i(TAG, "Análise iniciada (modo: ${if (cameraMode == MODE_ESP32_CAMERA) "ESP32" else "Local"})")
+            Log.i(TAG, "Análise iniciada (modo: $cameraMode)")
         } else {
             val benchmarkResult = benchmarkLogger.stopSession()
             stateMachine.entrarEstado(EST_INATIVO)
-            voz.forcar("cancelado", tr("analysis_stop_voice"))
+            if (!automatic) voz.forcar("cancelado", tr("analysis_stop_voice"))
             btnToggle.text = tr("start")
             btnToggle.contentDescription = tr("accessibility_start")
             tvAlertStatus.text = tr("analysis_paused")
@@ -759,11 +867,10 @@ class MainActivity : AppCompatActivity() {
             lastSituation = "VERIFICANDO"
             overlayView.clear()
             frameAnalyzer?.resetar()
-            espProcessor?.resetar()
-
-            if (cameraMode == MODE_ESP32_CAMERA) {
-                pararEsp32()
-            }
+            externalProcessor?.resetar()
+            if (cameraMode == MODE_X5_CAMERA) pararX5()
+            if (!automatic) crossingCoordinator?.notifyManualAnalysisStopped()
+            analysisStartedAutomatically = false
 
             Log.i(TAG, "Análise parada")
         }
@@ -838,6 +945,8 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 voz.forcar("voice_permission", msg)
             }
+        } else if (requestCode == MONITORING_PERMISSION_CODE) {
+            startAutomaticMonitoring()
         }
     }
 
@@ -849,10 +958,59 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         isActive = false
         benchmarkLogger.stopSession()
-        pararEsp32()
+        pararX5()
         cameraExecutor.shutdown()
         if (::voiceCommands.isInitialized) voiceCommands.destroy()
+        stopAutomaticMonitoring()
+        foregroundNavigationManager?.suspendForBackground()
+        activityScope.cancel()
         voz.destruir()
         if (::detector.isInitialized) detector.fechar()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopAutomaticMonitoring()
+        foregroundNavigationManager?.suspendForBackground()
+        if (analysisStartedAutomatically && isActive) setAnalysisActive(false, automatic = true)
+        // RTSP sockets must not survive in the background; the user can restart explicitly.
+        if (cameraMode == MODE_X5_CAMERA && isActive) setAnalysisActive(false)
+    }
+
+    /** Inicia apenas o contexto leve; câmera/YOLO continuam desligados até os critérios se confirmarem. */
+    private fun startAutomaticMonitoring() {
+        if (!::config.isInitialized || !config.walkingMonitoringEnabled || !config.automaticAnalysisEnabled) return
+        val needed = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed += Manifest.permission.ACCESS_FINE_LOCATION
+            needed += Manifest.permission.ACCESS_COARSE_LOCATION
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 29 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed += Manifest.permission.ACTIVITY_RECOGNITION
+        }
+        if (needed.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), MONITORING_PERMISSION_CODE)
+            return
+        }
+        crossingCoordinator?.startAutomaticMonitoring()
+    }
+
+    private fun stopAutomaticMonitoring() {
+        crossingCoordinator?.stopAutomaticMonitoring()
+    }
+
+    /** Mantém voz/GPS da rota ativos na tela que também pode iniciar a visão automaticamente. */
+    private fun resumeNavigationInMain() {
+        val activeRoute = NavigationSessionStore.currentRoute ?: return
+        if (!NavigationSessionStore.navigationRequested) return
+        if (foregroundNavigationRoute !== activeRoute) {
+            foregroundNavigationManager?.setRoute(activeRoute)
+            foregroundNavigationRoute = activeRoute
+        }
+        foregroundNavigationManager?.resumeForeground()
     }
 }

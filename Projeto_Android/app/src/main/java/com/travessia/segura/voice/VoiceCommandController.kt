@@ -172,7 +172,7 @@ class VoiceCommandController(
         if (containsAny(text, "camera do celular", "celular", "telefone", "phone camera", "phone", "mobile camera", "camara del celular", "telefono")) {
             return Command.SOURCE_PHONE
         }
-        if (containsAny(text, "camera externa", "esp32", "esp 32", "oculos", "external camera", "glasses camera", "camara externa", "gafas")) {
+        if (containsAny(text, "camera externa", "x5", "oculos", "external camera", "glasses camera", "camara externa", "gafas")) {
             return Command.SOURCE_EXTERNAL
         }
         if (containsAny(text, "configuracoes", "configuracao", "ajustes", "settings", "configuration", "configuracion")) {

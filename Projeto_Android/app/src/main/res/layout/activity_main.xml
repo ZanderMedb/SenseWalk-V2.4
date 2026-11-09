@@ -14,7 +14,7 @@
         android:visibility="gone" />
 
     <ImageView
-        android:id="@+id/espImageView"
+        android:id="@+id/externalImageView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:importantForAccessibility="no"
@@ -209,7 +209,7 @@
                     android:layout_weight="1"
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/bg_button_secondary"
-                    android:text="ESP32"
+                    android:text="Celular"
                     android:textAllCaps="false"
                     android:textColor="#FFFFFFFF"
                     android:textSize="13sp" />
@@ -223,6 +223,19 @@
                     android:layout_marginEnd="8dp"
                     android:background="@drawable/bg_button_secondary"
                     android:text="Voz"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btnNavigation"
+                    android:fontFamily="sans-serif-medium"
+                    android:layout_width="0dp"
+                    android:layout_height="54dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/bg_button_secondary"
+                    android:text="Navegar"
                     android:textAllCaps="false"
                     android:textColor="#FFFFFFFF"
                     android:textSize="13sp" />
