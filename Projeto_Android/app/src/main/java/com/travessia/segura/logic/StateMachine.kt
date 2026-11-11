@@ -10,21 +10,11 @@ import com.travessia.segura.config.AppConfig.Companion.EST_VIA_LIVRE
 import com.travessia.segura.detection.VeiculoInfo
 import com.travessia.segura.tracking.Rastreador
 import com.travessia.segura.voice.VoiceSystem
+import com.travessia.segura.voice.VoicePriority
 
 /**
- * Máquina de estados simplificada e corrigida.
- *
- * SEMÁFORO (prioridade máxima):
- *   VERMELHO ou AMARELO → não pode passar (amarelo = vermelho)
- *   VERDE → verifica carros → se ok, pode passar
- *
- * FAIXA (sem semáforo):
- *   Sem carros → aguarda TEMPO_CONFIRMAR_LIVRE_S → avisa que pode passar
- *   Carros em movimento → aguarda
- *   Carros pararam/saíram → aguarda TEMPO_CONFIRMAR_PARADO_S → avisa que pode passar
- *
- * VIA LIVRE (sem faixa e sem semáforo):
- *   Mesma lógica da FAIXA
+ * Interpreta observações visuais; nenhuma combinação autoriza uma travessia.
+ * Ausência de veículos e semáforo verde continuam sendo condições não confirmadas.
  */
 class StateMachine(
     private val config: AppConfig,
@@ -33,7 +23,7 @@ class StateMachine(
 ) {
     companion object {
         private const val TAG = "StateMachine"
-        // Tempo de confirmação — "via realmente limpa". Ajuste depois dos testes.
+        // Confirma persistência da observação; não comprova segurança da via.
         private const val TEMPO_CONFIRMAR_LIVRE_S = 3.0
         private const val TEMPO_CONFIRMAR_PARADO_S = 3.0
     }
@@ -52,11 +42,12 @@ class StateMachine(
     // Semáforo
     var semCorAtual = "NENHUM"
         private set
-    private var semCorAnterior = "NENHUM"
     private var tSemPerdido: Double? = null
 
     // Timer de via limpa / carros parados
     private var tViaLimpa: Double? = null
+    private var tipoConfirmacao: String? = null
+    private var aproximacaoAtiva = false
 
     // Upgrade counters
     private var upgradeSemCount = 0
@@ -75,12 +66,18 @@ class StateMachine(
     // ================================================================
 
     fun entrarEstado(novo: String) {
+        if (novo == EST_INATIVO || novo == EST_RECONHECENDO) {
+            voz.resetarEstados("scene_")
+            aproximacaoAtiva = false
+        }
+        if (novo != EST_SEMAFORO) voz.observarEstado("scene_light","not_observed")
+        if (novo != EST_FAIXA) voz.observarEstado("scene_alignment","not_applicable")
         Log.i(TAG, "[ESTADO] $estado -> $novo")
         estado = novo
         tEstado = now()
         situacaoAtual = "---"
         tViaLimpa = null
-        semCorAnterior = "NENHUM"
+        tipoConfirmacao = null
         tSemPerdido = null
         upgradeSemCount = 0
         upgradeFaixaCount = 0
@@ -106,10 +103,16 @@ class StateMachine(
     ) {
         semCorAtual = semCorFrame
         faixaCentroX = faixaCx
+        if (estado != EST_INATIVO && veiculosReais.values.any { it.classif == "APROXIMANDO" }) {
+            aproximacaoAtiva = true
+            voz.falarEstado("scene_approach","approaching",config.tr("voice_vehicle_approaching"),VoicePriority.SAFETY)
+        } else if (voz.observarEstado("scene_approach","absent",1500)) {
+            aproximacaoAtiva = false
+        }
 
         when (estado) {
             EST_INATIVO      -> { /* nada */ }
-            EST_RECONHECENDO -> processarReconhecendo(semCorFrame, faixaDet, veiculosReais.size)
+            EST_RECONHECENDO -> processarReconhecendo(semCorFrame, faixaDet)
             EST_SEMAFORO     -> processarSemaforo(veiculosReais, nSemId, semCorFrame, faixaDet)
             EST_FAIXA        -> processarFaixa(veiculosReais, nSemId, semCorFrame, faixaDet, faixaCx, wf)
             EST_VIA_LIVRE    -> processarViaLivre(veiculosReais, nSemId, semCorFrame, faixaDet)
@@ -120,7 +123,7 @@ class StateMachine(
     //  RECONHECENDO
     // ================================================================
 
-    private fun processarReconhecendo(semCorFrame: String, faixaDet: Boolean, nvReais: Int) {
+    private fun processarReconhecendo(semCorFrame: String, faixaDet: Boolean) {
         situacaoAtual = "RECONHECENDO"
         reconFrames++
         if (semCorFrame != "NENHUM") reconSemaforo++
@@ -139,15 +142,15 @@ class StateMachine(
 
         when {
             ps >= config.reconThreshold -> {
-                voz.forcar("recon_resultado", config.tr("voice_recon_traffic_light"))
+                voz.falarEstado("scene_context",EST_SEMAFORO,config.tr("voice_recon_traffic_light"))
                 entrarEstado(EST_SEMAFORO)
             }
             pf >= config.reconThreshold -> {
-                voz.forcar("recon_resultado", config.tr("voice_recon_crosswalk"))
+                voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_recon_crosswalk"))
                 entrarEstado(EST_FAIXA)
             }
             else -> {
-                voz.forcar("recon_resultado", config.tr("voice_recon_road"))
+                voz.falarEstado("scene_context",EST_VIA_LIVRE,config.tr("voice_recon_road"))
                 entrarEstado(EST_VIA_LIVRE)
             }
         }
@@ -170,24 +173,20 @@ class StateMachine(
         if (semCorFrame != "NENHUM") {
             tSemPerdido = null
 
-            // Anunciar mudança de cor
-            if (semCorFrame != semCorAnterior && semCorAnterior != "NENHUM") {
-                when (semCorFrame) {
-                    "VERDE"             -> voz.forcar("semaforo_cor", config.tr("voice_green_light"))
-                    "VERMELHO","AMARELO" -> voz.forcar("semaforo_cor", config.tr("voice_red_light_stop"))
-                }
-            }
-            semCorAnterior = semCorFrame
-
             when (semCorFrame) {
                 // VERMELHO ou AMARELO: não pode passar
                 "VERMELHO", "AMARELO" -> {
                     situacaoAtual = "AGUARDE"
                     tViaLimpa = null
-                    voz.falar("semaforo_aguarde", config.tr("voice_red_light_wait"))
+                    voz.falarEstado("scene_light",semCorFrame,
+                        config.tr(if (semCorFrame == "AMARELO") "voice_yellow_light_wait" else "voice_red_light_wait"),VoicePriority.SAFETY)
+                    voz.observarEstado("scene_traffic","blocked_by_light")
                 }
                 // VERDE: verifica carros
-                "VERDE" -> processarSemaforoVerde(veiculosReais, nSemId, agora)
+                "VERDE" -> {
+                    voz.falarEstado("scene_light","VERDE",config.tr("voice_green_light"))
+                    processarSemaforoVerde(veiculosReais, nSemId, agora)
+                }
             }
 
         } else {
@@ -195,24 +194,15 @@ class StateMachine(
             if (tSemPerdido == null) tSemPerdido = agora
             if (agora - tSemPerdido!! > 4.0) {
                 if (faixaDet) {
-                    voz.forcar("upgrade", config.tr("voice_light_lost_crosswalk"))
+                    voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_light_lost_crosswalk"))
                     entrarEstado(EST_FAIXA)
                 } else {
-                    voz.forcar("upgrade", config.tr("voice_light_lost_road"))
+                    voz.falarEstado("scene_context",EST_VIA_LIVRE,config.tr("voice_light_lost_road"))
                     entrarEstado(EST_VIA_LIVRE)
                 }
             }
         }
 
-        // Heartbeat
-        if (voz.tempoSilencio() >= config.heartbeatInterval) {
-            val msg = when (semCorFrame) {
-                "VERDE"             -> config.tr("voice_green_light")
-                "VERMELHO","AMARELO" -> config.tr("voice_red_light_wait")
-                else                -> config.tr("voice_looking_for_light")
-            }
-            voz.falar("heartbeat", msg)
-        }
     }
 
     private fun processarSemaforoVerde(
@@ -224,10 +214,10 @@ class StateMachine(
 
         // Sem carros
         if (nvReais == 0 && nSemId == 0) {
-            if (tViaLimpa == null) tViaLimpa = agora
+            iniciarConfirmacao("none",agora)
             if (agora - tViaLimpa!! >= TEMPO_CONFIRMAR_LIVRE_S) {
-                situacaoAtual = "SEGURO"
-                voz.falar("semaforo_pode", config.tr("voice_green_road_clear"))
+                 situacaoAtual = "VERIFICANDO"
+                anunciarTransito("none",config.tr("voice_road_clear"))
             } else {
                 situacaoAtual = "VERIFICANDO"
             }
@@ -239,7 +229,7 @@ class StateMachine(
         if (temMovimento) {
             tViaLimpa = null
             situacaoAtual = "AGUARDE"
-            voz.falar("semaforo_veiculo", config.tr("voice_green_has_vehicles"))
+            anunciarTransito("moving",config.tr("voice_green_has_vehicles"),VoicePriority.SAFETY)
             return
         }
 
@@ -248,17 +238,18 @@ class StateMachine(
             it.classif == "PARADO" && tracker.historicoOk(it.tid)
         }
         if (todosParados) {
-            if (tViaLimpa == null) tViaLimpa = agora
+            iniciarConfirmacao("stopped",agora)
             if (agora - tViaLimpa!! >= TEMPO_CONFIRMAR_PARADO_S) {
-                situacaoAtual = "SEGURO"
-                voz.falar("semaforo_pode", config.tr("voice_green_vehicles_stopped"))
+                 situacaoAtual = "VERIFICANDO"
+                anunciarTransito("stopped",config.tr("voice_road_vehicles_stopped"))
             } else {
                 situacaoAtual = "AGUARDE"
-                voz.falar("semaforo_veiculo", config.tr("voice_green_vehicles_stopping"))
+                anunciarTransito("stopping",config.tr("voice_green_vehicles_stopping"))
             }
         } else {
             tViaLimpa = null
             situacaoAtual = "AGUARDE"
+            anunciarTransito("present",config.tr("voice_green_has_vehicles"),VoicePriority.SAFETY)
         }
     }
 
@@ -278,7 +269,7 @@ class StateMachine(
         upgradeSemCount = if (semCorFrame != "NENHUM") upgradeSemCount + 1
         else maxOf(0, upgradeSemCount - 1)
         if (upgradeSemCount >= config.upgradeFrames) {
-            voz.forcar("upgrade", config.tr("voice_recon_traffic_light"))
+            voz.falarEstado("scene_context",EST_SEMAFORO,config.tr("voice_recon_traffic_light"))
             entrarEstado(EST_SEMAFORO)
             return
         }
@@ -288,26 +279,23 @@ class StateMachine(
             val (dir, intens) = config.calcularAlinhamentoFaixa(faixaCx, wf)
             when (dir) {
                 "ESQUERDA" -> {
-                    voz.falar("faixa_alinhamento",
-                        if (intens > 0.35f) config.tr("voice_turn_left_strong")
-                        else config.tr("voice_turn_left_light"))
+                    voz.falarEstado("scene_alignment","left_${intens > 0.35f}",
+                        if (intens > 0.35f) config.tr("voice_turn_left_strong") else config.tr("voice_turn_left_light"),settleMs=1200)
                     faixaAlinhada = false
                 }
                 "DIREITA" -> {
-                    voz.falar("faixa_alinhamento",
-                        if (intens > 0.35f) config.tr("voice_turn_right_strong")
-                        else config.tr("voice_turn_right_light"))
+                    voz.falarEstado("scene_alignment","right_${intens > 0.35f}",
+                        if (intens > 0.35f) config.tr("voice_turn_right_strong") else config.tr("voice_turn_right_light"),settleMs=1200)
                     faixaAlinhada = false
                 }
                 "ALINHADO" -> {
-                    if (!faixaAlinhada) {
-                        voz.falar("faixa_alinhamento", config.tr("voice_aligned_crosswalk"))
-                        faixaAlinhada = true
-                    }
+                    voz.falarEstado("scene_alignment","aligned",config.tr("voice_aligned_crosswalk"),settleMs=1200)
+                    faixaAlinhada = true
                 }
             }
         } else if (!faixaDet) {
             faixaAlinhada = false
+            voz.observarEstado("scene_alignment","missing",2000)
         }
 
         // Lógica de veículos
@@ -316,17 +304,9 @@ class StateMachine(
             msgLivre      = config.tr("voice_crosswalk_clear"),
             msgAguarde    = config.tr("voice_crosswalk_wait"),
             msgParando    = config.tr("voice_vehicles_stopping"),
-            msgPodePassar = config.tr("voice_crosswalk_vehicles_stopped"),
-            prefixo       = "faixa"
+            msgPodePassar = config.tr("voice_crosswalk_vehicles_stopped")
         )
 
-        // Heartbeat
-        if (voz.tempoSilencio() >= config.heartbeatInterval) {
-            val nMov = veiculosReais.values.count { it.classif != "PARADO" }
-            voz.falar("heartbeat",
-                if (nMov > 0) config.trFormat("voice_monitor_crosswalk_moving", nMov)
-                else config.tr("voice_monitor_crosswalk"))
-        }
     }
 
     // ================================================================
@@ -343,7 +323,7 @@ class StateMachine(
         upgradeSemCount = if (semCorFrame != "NENHUM") upgradeSemCount + 1
         else maxOf(0, upgradeSemCount - 1)
         if (upgradeSemCount >= config.upgradeFrames) {
-            voz.forcar("upgrade", config.tr("voice_recon_traffic_light"))
+            voz.falarEstado("scene_context",EST_SEMAFORO,config.tr("voice_recon_traffic_light"))
             entrarEstado(EST_SEMAFORO)
             return
         }
@@ -352,7 +332,7 @@ class StateMachine(
         upgradeFaixaCount = if (faixaDet) upgradeFaixaCount + 1
         else maxOf(0, upgradeFaixaCount - 1)
         if (upgradeFaixaCount >= config.upgradeFrames) {
-            voz.forcar("upgrade", config.tr("voice_recon_crosswalk"))
+            voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_recon_crosswalk"))
             entrarEstado(EST_FAIXA)
             return
         }
@@ -362,17 +342,9 @@ class StateMachine(
             msgLivre      = config.tr("voice_road_clear"),
             msgAguarde    = config.tr("voice_road_wait"),
             msgParando    = config.tr("voice_vehicles_stopping"),
-            msgPodePassar = config.tr("voice_road_vehicles_stopped"),
-            prefixo       = "via"
+            msgPodePassar = config.tr("voice_road_vehicles_stopped")
         )
 
-        // Heartbeat
-        if (voz.tempoSilencio() >= config.heartbeatInterval) {
-            val nMov = veiculosReais.values.count { it.classif != "PARADO" }
-            voz.falar("heartbeat",
-                if (nMov > 0) config.trFormat("voice_monitor_road_moving", nMov)
-                else config.tr("voice_monitor_road"))
-        }
     }
 
     // ================================================================
@@ -389,18 +361,17 @@ class StateMachine(
         msgLivre: String,
         msgAguarde: String,
         msgParando: String,
-        msgPodePassar: String,
-        prefixo: String
+        msgPodePassar: String
     ) {
         val agora = now()
         val nvReais = veiculosReais.size
 
         // Sem carros
         if (nvReais == 0 && nSemId == 0) {
-            if (tViaLimpa == null) tViaLimpa = agora
+            iniciarConfirmacao("none",agora)
             if (agora - tViaLimpa!! >= TEMPO_CONFIRMAR_LIVRE_S) {
-                situacaoAtual = "SEGURO"
-                voz.falar("${prefixo}_livre", msgLivre)
+                 situacaoAtual = "VERIFICANDO"
+                anunciarTransito("none",msgLivre)
             } else {
                 situacaoAtual = "VERIFICANDO"
                 // silêncio — aguardando confirmação
@@ -414,7 +385,7 @@ class StateMachine(
             // Carro em movimento — resetar, não pode passar
             tViaLimpa = null
             situacaoAtual = "AGUARDE"
-            voz.falar("${prefixo}_movimento", msgAguarde)
+            anunciarTransito("moving",msgAguarde,VoicePriority.SAFETY)
 
         } else {
             // Todos parados (com histórico ok)
@@ -424,22 +395,40 @@ class StateMachine(
                     }
 
             if (todosParados) {
-                if (tViaLimpa == null) tViaLimpa = agora
+                iniciarConfirmacao("stopped",agora)
                 val tempoParado = agora - tViaLimpa!!
                 if (tempoParado >= TEMPO_CONFIRMAR_PARADO_S) {
-                    situacaoAtual = "SEGURO"
-                    voz.falar("${prefixo}_parados", msgPodePassar)
+                     situacaoAtual = "VERIFICANDO"
+                    anunciarTransito("stopped",msgPodePassar)
                 } else {
                     situacaoAtual = "AGUARDE"
-                    voz.falar("${prefixo}_parando", msgParando)
+                    anunciarTransito("stopping",msgParando)
                 }
             } else {
                 // Histórico insuficiente — aguardando dados
                 tViaLimpa = null
                 situacaoAtual = "AGUARDE"
+                anunciarTransito("present",msgAguarde,VoicePriority.SAFETY)
             }
         }
     }
 
-    private fun now(): Double = System.currentTimeMillis() / 1000.0
+    private fun anunciarTransito(state: String, text: String, priority: VoicePriority = VoicePriority.CROSSING) {
+        if (aproximacaoAtiva && state in setOf("moving","present")) {
+            // O alerta específico já descreve o veículo: não acrescentar outro "aguarde".
+            voz.observarEstado("scene_traffic","$estado:approaching")
+            return
+        }
+        // Histórico insuficiente e movimento usam o mesmo aviso de presença.
+        val speechState = if (state == "present") "moving" else state
+        voz.falarEstado("scene_traffic","$estado:$speechState",text,priority,
+            settleMs=if (state == "stopping") 1200 else 0)
+    }
+
+    private fun iniciarConfirmacao(tipo: String, agora: Double) {
+        if (tViaLimpa == null || tipoConfirmacao != tipo) tViaLimpa = agora
+        tipoConfirmacao = tipo
+    }
+
+    private fun now(): Double = android.os.SystemClock.elapsedRealtime() / 1000.0
 }

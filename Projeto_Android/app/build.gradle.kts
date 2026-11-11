@@ -1,20 +1,6 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-}
-
-// local.properties não é versionado. Uma variável de ambiente/Gradle tem precedência
-// para CI; a chave nunca deve ser escrita em código ou no controle de versão.
-val graphHopperApiKey: String by lazy {
-    val local = Properties()
-    val localFile = rootProject.file("local.properties")
-    if (localFile.exists()) localFile.inputStream().use(local::load)
-    providers.gradleProperty("GRAPHHOPPER_API_KEY").orNull
-        ?: System.getenv("GRAPHHOPPER_API_KEY")
-        ?: local.getProperty("GRAPHHOPPER_API_KEY")
-        ?: ""
 }
 
 android {
@@ -25,12 +11,10 @@ android {
         applicationId = "com.travessia.segura"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "2.4-vision-benchmark"
+        versionCode = 13
+        versionName = "2.4.8-quiet-transitions"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // A chave é lida apenas do local.properties/variável Gradle da máquina.
-        // Nunca adicione uma chave real ao repositório.
-        buildConfigField("String", "GRAPHHOPPER_API_KEY", "\"$graphHopperApiKey\"")
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -73,24 +57,21 @@ android {
         noCompress += listOf("tflite")
     }
 
-    buildFeatures {
-        buildConfig = true
-    }
 }
 
 dependencies {
+    implementation("com.herohan:UVCAndroid:1.0.13")
     // ── Android Core ──
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
 
-    // ── Localização e reconhecimento de atividade ──
-    implementation("com.google.android.gms:play-services-location:21.3.0")
-
-    // ── TensorFlow Lite ──
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    // LiteRT 1.x mantém org.tensorflow.lite.Interpreter e fornece JNI alinhado a 16 KB.
+    // Não incluir tensorflow-lite antigo junto: ambos fornecem as mesmas classes.
+    implementation("com.google.ai.edge.litert:litert:1.4.2")
 
     // ── CameraX ──
-    val cameraxVersion = "1.3.4"
+    // Série compatível com compileSdk 35 e bibliotecas nativas alinhadas a 16 KB.
+    val cameraxVersion = "1.4.2"
     implementation("androidx.camera:camera-core:$cameraxVersion")
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
@@ -99,9 +80,8 @@ dependencies {
     // ── Coroutines ──
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // Parser JSON para respostas do Overpass, Nominatim e GraphHopper.
-    implementation("org.json:json:20240303")
-
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 
 }

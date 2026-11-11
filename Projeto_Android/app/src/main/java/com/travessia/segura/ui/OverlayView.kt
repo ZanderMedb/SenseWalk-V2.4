@@ -33,6 +33,25 @@ class OverlayView @JvmOverloads constructor(
     private var frameWidth = 1f
     private var frameHeight = 1f
     private var sensorRotation = 90
+    private var roadMask: Bitmap? = null
+    private var roadWidth = 1
+    private var roadHeight = 1
+    private var roadMetrics = ""
+
+    /** Chamado na UI. Máscara de rótulos, sem interpolar IDs de classes. */
+    fun updateRoad(frame: com.travessia.segura.road.RoadDebugFrame) {
+        roadMask?.recycle(); roadMask = null
+        frame.labels?.let { labels ->
+            val colors = IntArray(labels.size) { i -> when (labels[i].toInt()) {
+                0 -> 0x668000FF; 1 -> 0x6600DDFF; else -> Color.TRANSPARENT
+            } }
+            roadMask = Bitmap.createBitmap(colors, 256, 128, Bitmap.Config.ARGB_8888)
+        }
+        roadWidth = frame.frameWidth; roadHeight = frame.frameHeight
+        roadMetrics = if (frame.labels != null) "${frame.state} ${frame.reason} FFNet=${frame.inferenceMs}ms frame=${frame.totalMs}ms skip=${frame.dropped} " +
+            "FPS cb/FF/Y: %.1f/%.1f/%.1f".format(frame.callbackFps,frame.segmentationFps,frame.yoloFps) else ""
+        invalidate()
+    }
 
     // ── Density para converter dp → px ──
     private val dp = context.resources.displayMetrics.density
@@ -133,6 +152,7 @@ class OverlayView @JvmOverloads constructor(
      */
     fun clear() {
         this.boxes = emptyList()
+        roadMask?.recycle(); roadMask = null; roadMetrics = ""
         postInvalidate()
     }
 
@@ -165,7 +185,13 @@ class OverlayView @JvmOverloads constructor(
         val vw = width.toFloat()
         val vh = height.toFloat()
 
-        if (vw <= 0f || vh <= 0f || boxes.isEmpty()) return
+        if (vw <= 0f || vh <= 0f) return
+        roadMask?.let { mask ->
+            val scale = maxOf(vw / roadWidth, vh / roadHeight)
+            val w = roadWidth * scale; val h = roadHeight * scale
+            canvas.drawBitmap(mask, null, RectF((vw-w)/2, (vh-h)/2, (vw+w)/2, (vh+h)/2), null)
+            canvas.drawText(roadMetrics, 10f * dp, vh - 100f * dp, textPaint)
+        }
 
         for (box in boxes) {
             // Transformar coordenadas do sensor → view

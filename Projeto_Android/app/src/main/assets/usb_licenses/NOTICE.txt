@@ -1,0 +1,17 @@
+SenseWalk USB/UVC integration
+
+UVCAndroid 1.0.13: https://github.com/shiyinghan/UVCAndroid
+Maven artifact: com.herohan:UVCAndroid:1.0.13
+Apache-2.0; includes UVCCamera by saki / serenegiant and its native dependencies.
+The distributed native libraries are used without modification, as separate .so files.
+
+libusb is licensed under LGPL-2.1-or-later; see libusb_COPYING.txt.
+Corresponding upstream source/build instructions for the UVCAndroid bundle:
+https://github.com/shiyinghan/UVCAndroid/tree/main/libuvccamera/src/main/jni
+https://repo.maven.apache.org/maven2/com/herohan/UVCAndroid/1.0.13/
+libuvc and libyuv use their respective BSD licenses; see accompanying files.
+RapidJSON uses the license bundled in rapidjson_LICENSE.txt.
+libjpeg-turbo uses the BSD/IJG/zlib terms in libjpeg-turbo_LICENSE.md.
+This software is based in part on the work of the Independent JPEG Group.
+
+No camera images are recorded or uploaded by this integration.

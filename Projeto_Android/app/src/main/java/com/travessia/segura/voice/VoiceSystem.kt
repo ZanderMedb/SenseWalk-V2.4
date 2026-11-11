@@ -10,7 +10,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Sistema de voz com fila e cooldowns por chave.
+ * Observações faladas por transição de estado; comandos explícitos mantêm fila/cooldowns.
  * A linguagem do TTS acompanha o idioma escolhido em Configurações/Login.
  */
 class VoiceSystem(
@@ -25,40 +25,17 @@ class VoiceSystem(
 
     private var tts: TextToSpeech? = null
     private val fila = VoiceMessageScheduler(MAX_QUEUE)
+    private val observedStates = SpeechStateGate()
     private val ultimos = mutableMapOf<String, Double>()
     private val falando = AtomicBoolean(false)
-    private var tUltimaFala = now()
     private var idiomaAtualTts: String = config.appLanguage
+    @Volatile private var currentUtteranceId: String? = null
+    @Volatile private var currentPriority: VoicePriority? = null
+    private var question: Pair<String, (Boolean) -> Unit>? = null
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     var funcionando = false
         private set
-
-    private val cooldowns = mapOf(
-        "inicio"           to 0.0,
-        "cancelado"        to 0.0,
-        "recon_resultado"  to 0.0,
-        "recon_progresso"  to 4.0,
-
-        "semaforo_cor"     to 0.5,
-        "semaforo_pode"    to 5.0,
-        "semaforo_aguarde" to 7.0,
-        "semaforo_veiculo" to 5.0,
-        "semaforo_perdido" to 8.0,
-
-        "faixa_alinhamento" to 3.5,
-        "faixa_livre"      to 5.0,
-        "faixa_parados"    to 5.0,
-        "faixa_parando"    to 4.0,
-        "faixa_movimento"  to 5.0,
-
-        "via_livre"        to 5.0,
-        "via_parados"      to 5.0,
-        "via_parando"      to 4.0,
-        "via_movimento"    to 5.0,
-
-        "upgrade"          to 0.0,
-        "heartbeat"        to 4.0
-    )
 
     init {
         tts = TextToSpeech(context, this)
@@ -71,10 +48,11 @@ class VoiceSystem(
             tts?.setSpeechRate(1.1f)
 
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(id: String?)  { falando.set(true) }
-                override fun onDone(id: String?)   { falando.set(false); processarFila() }
+                override fun onStart(id: String?)  { if (id == currentUtteranceId) falando.set(true) }
+                override fun onDone(id: String?)   { finishUtterance(id, true) }
                 @Deprecated("Deprecated in Java")
-                override fun onError(id: String?)  { falando.set(false); processarFila() }
+                override fun onError(id: String?)  { finishUtterance(id) }
+                override fun onStop(id: String?, interrupted: Boolean) { finishUtterance(id) }
             })
 
             funcionando = true
@@ -117,18 +95,49 @@ class VoiceSystem(
         falarPrioritario(chave, texto, VoicePriority.CROSSING)
     }
 
+    @Synchronized fun observarEstado(topic: String, state: String, settleMs: Long = 0): Boolean {
+        val previous = observedStates.current(topic)
+        val stable = observedStates.observe(topic,state,android.os.SystemClock.elapsedRealtime(),settleMs)
+        if (observedStates.current(topic) != previous) fila.remove("state:$topic")
+        return stable
+    }
+
+    /** Sem cooldown periódico: uma fala por valor observado, rearmada somente pela transição. */
+    @Synchronized fun falarEstado(topic: String, state: String, text: String,
+        priority: VoicePriority = VoicePriority.CROSSING, settleMs: Long = 0) {
+        if (!observarEstado(topic,state,settleMs) || !funcionando || !observedStates.needsSpeech(topic,state)) return
+        val key = "state:$topic"
+        if (fila.contains(key)) return
+        aplicarIdiomaTts()
+        if (fila.offer(ScheduledVoiceMessage(key,text,priority,System.currentTimeMillis(),topic,state))) {
+            if (priority == VoicePriority.SAFETY && (currentPriority?.weight ?: Int.MAX_VALUE) < priority.weight) {
+                completeQuestion(false); currentUtteranceId = null; currentPriority = null
+                tts?.stop(); falando.set(false)
+            }
+            processarFila()
+        }
+    }
+
+    @Synchronized fun resetarEstados(prefix: String) {
+        observedStates.reset(prefix); fila.removePrefix("state:$prefix")
+    }
+
     /** Insere uma mensagem sem interromper uma de prioridade superior já em andamento. */
-    fun falarPrioritario(chave: String, texto: String, prioridade: VoicePriority) {
+    @Synchronized fun falarPrioritario(chave: String, texto: String, prioridade: VoicePriority) {
         if (!funcionando) return
         aplicarIdiomaTts()
 
         val agora = now()
-        val cd = cooldowns[chave] ?: 3.0
+        val cd = 3.0
         if ((agora - (ultimos[chave] ?: 0.0)) < cd) return
 
         if (fila.offer(ScheduledVoiceMessage(chave, texto, prioridade, System.currentTimeMillis()))) {
             ultimos[chave] = agora
-            tUltimaFala = agora
+            if (prioridade == VoicePriority.SAFETY && (currentPriority?.weight ?: Int.MAX_VALUE) < prioridade.weight) {
+                completeQuestion(false)
+                currentUtteranceId = null; currentPriority = null
+                tts?.stop(); falando.set(false)
+            }
             processarFila()
         }
         Log.d(TAG, "[VOZ] [$chave] $texto")
@@ -140,38 +149,69 @@ class VoiceSystem(
     }
 
     /** Alertas críticos (ex.: semáforo vermelho) interrompem instruções de menor prioridade. */
-    fun forcarPrioritario(chave: String, texto: String, prioridade: VoicePriority) {
+    @Synchronized fun forcarPrioritario(chave: String, texto: String, prioridade: VoicePriority) {
         if (!funcionando) { Log.d(TAG, "[VOZ!] OFF $texto"); return }
         aplicarIdiomaTts()
         limpar()
         fila.offer(ScheduledVoiceMessage(chave, texto, prioridade, System.currentTimeMillis()))
         val agora = now()
         ultimos[chave] = agora
-        tUltimaFala = agora
         tts?.stop()
         falando.set(false)
         processarFila()
         Log.d(TAG, "[VOZ!] [$chave] $texto")
     }
 
-    private fun processarFila() {
+    @Synchronized private fun processarFila() {
         if (falando.get()) return
-        val mensagem = fila.poll() ?: return
+        var mensagem = fila.poll() ?: return
+        while (System.currentTimeMillis() - mensagem.timestampMs > 3000 ||
+            (mensagem.stateTopic != null && observedStates.current(mensagem.stateTopic!!) != mensagem.stateValue)) {
+            mensagem = fila.poll() ?: return
+        }
         val params = android.os.Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, config.volumeVoz)
         }
         // onStart é assíncrono; marque antes de speak para outra origem não limpar esta fala.
         falando.set(true)
-        tts?.speak(mensagem.text, TextToSpeech.QUEUE_FLUSH, params, "u_${System.currentTimeMillis()}")
+        val id = "u_${System.nanoTime()}"
+        currentUtteranceId = id; currentPriority = mensagem.priority
+        if (tts?.speak(mensagem.text, TextToSpeech.QUEUE_FLUSH, params, id) != TextToSpeech.SUCCESS) finishUtterance(id)
+        else if (mensagem.stateTopic != null && mensagem.stateValue != null) observedStates.markSpoken(mensagem.stateTopic!!,mensagem.stateValue!!)
     }
 
-    private fun limpar() {
+    @Synchronized private fun limpar() {
+        completeQuestion(false)
+        currentUtteranceId = null; currentPriority = null
         fila.clear()
         tts?.stop()
         falando.set(false)
     }
 
-    fun tempoSilencio(): Double = now() - tUltimaFala
+    @Synchronized private fun finishUtterance(id: String?, success: Boolean = false) {
+        if (id == null || id != currentUtteranceId) return
+        if (question?.first == id) completeQuestion(success)
+        currentUtteranceId = null; currentPriority = null
+        falando.set(false); processarFila()
+    }
+
+    private fun completeQuestion(success: Boolean) {
+        val callback = question?.second ?: return
+        question = null
+        mainHandler.post { callback(success) }
+    }
+
+    /** Microfone só deve abrir após onDone real do TTS, nunca por atraso estimado. */
+    @Synchronized fun ask(text: String, finished: (Boolean) -> Unit) {
+        if (!funcionando || config.volumeVoz <= 0f) { finished(false); return }
+        limpar(); aplicarIdiomaTts()
+        val id = "question_${System.nanoTime()}"
+        question = id to finished
+        currentUtteranceId = id; currentPriority = VoicePriority.CROSSING
+        falando.set(true)
+        val params = android.os.Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, config.volumeVoz) }
+        if (tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, id) != TextToSpeech.SUCCESS) finishUtterance(id)
+    }
 
     /** Interrompe a fala atual e limpa mensagens pendentes antes de ouvir um comando. */
     fun interromper() {
@@ -179,6 +219,7 @@ class VoiceSystem(
     }
 
     fun destruir() {
+        limpar()
         tts?.stop()
         tts?.shutdown()
     }

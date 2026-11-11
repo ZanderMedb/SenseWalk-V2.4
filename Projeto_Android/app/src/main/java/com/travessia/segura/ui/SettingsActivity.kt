@@ -78,41 +78,30 @@ class SettingsActivity : AppCompatActivity() {
             config.voiceAutoListen = it
         }
 
-        addSection(tr("settings_navigation_section"), tr("settings_navigation_subtitle"))
-        addSwitch(tr("settings_auto_analysis"), config.automaticAnalysisEnabled) {
-            config.automaticAnalysisEnabled = it
+        fun roadText(key: String) = com.travessia.segura.road.RoadText.get(config.appLanguage, key)
+        addSection(roadText("setting"), roadText("subtitle"))
+        addSwitch(roadText("setting"), config.automaticRoadDetection) { config.automaticRoadDetection = it }
+        addSwitch(roadText("debug"), config.roadDebugOverlay) { config.roadDebugOverlay = it }
+        addSliderInt(roadText("seg_fps"), config.roadSegmentationFps, 1, 5) { config.roadSegmentationFps = it }
+        addSliderInt(roadText("yolo_fps"), config.roadYoloFps, 1, 30) { config.roadYoloFps = it }
+        addSliderInt(roadText("confirm"), config.roadConfirmationMs, 500, 5000) { config.roadConfirmationMs = it }
+        addSliderInt(roadText("hold"), config.roadHoldMs, 5000, 60000) { config.roadHoldMs = it }
+        addSliderInt(roadText("cooldown"), config.roadCooldownMs, 5000, 60000) { config.roadCooldownMs = it }
+        addActionButton(roadText("license")) {
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Qualcomm FFNet-122NS-LowRes — BSD-3-Clause")
+                .setMessage(assets.open("ffnet_LICENSE.txt").bufferedReader().use { it.readText() })
+                .setPositiveButton(android.R.string.ok, null).show()
         }
-        addSwitch(tr("settings_walking_monitoring"), config.walkingMonitoringEnabled) {
-            config.walkingMonitoringEnabled = it
+        addActionButton("USB / UVC — Licenses") {
+            val names = assets.list("usb_licenses").orEmpty()
+            androidx.appcompat.app.AlertDialog.Builder(this).setTitle("USB / UVC")
+                .setItems(names) { _, index ->
+                    androidx.appcompat.app.AlertDialog.Builder(this).setTitle(names[index])
+                        .setMessage(assets.open("usb_licenses/${names[index]}").bufferedReader().use { it.readText() })
+                        .setPositiveButton(android.R.string.ok, null).show()
+                }.show()
         }
-        addSwitch(tr("settings_voice_navigation"), config.voiceNavigationEnabled) {
-            config.voiceNavigationEnabled = it
-        }
-        addSliderInt(
-            tr("settings_crossing_alert_distance"),
-            config.crossingAlertDistanceMeters,
-            10,
-            80
-        ) { config.crossingAlertDistanceMeters = it }
-        addSliderInt(
-            tr("settings_location_frequency"),
-            config.locationUpdateIntervalSeconds,
-            3,
-            60
-        ) { config.locationUpdateIntervalSeconds = it }
-        addSliderInt(
-            tr("settings_crossing_hysteresis"),
-            config.crossingExitHysteresisMeters,
-            5,
-            50
-        ) { config.crossingExitHysteresisMeters = it }
-        addSliderInt(
-            tr("settings_auto_cooldown"),
-            config.automaticAnalysisCooldownSeconds,
-            30,
-            300
-        ) { config.automaticAnalysisCooldownSeconds = it }
-
         addSection(tr("settings_appearance_section"), tr("settings_appearance_subtitle"))
         addSwitch(tr("settings_show_boxes"), config.mostrarOverlay) {
             config.mostrarOverlay = it
@@ -240,9 +229,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         addSliderFloat(tr("settings_crosswalk_margin"), config.faixaMargemAlinhamento, 0.02f, 0.30f, 0.01f) {
             config.faixaMargemAlinhamento = it
-        }
-        addSliderFloat(tr("settings_heartbeat"), config.heartbeatInterval, 2f, 15f, 0.5f) {
-            config.heartbeatInterval = it
         }
         addSliderFloat(tr("settings_voice_volume"), config.volumeVoz, 0.1f, 1.0f, 0.1f) {
             config.volumeVoz = it

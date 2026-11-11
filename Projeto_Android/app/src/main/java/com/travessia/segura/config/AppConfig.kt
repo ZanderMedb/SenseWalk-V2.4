@@ -31,47 +31,30 @@ class AppConfig(context: Context) {
         get()  = prefs.getBoolean("voice_auto_listen", false)
         set(v) = prefs.edit().putBoolean("voice_auto_listen", v).apply()
 
-    // ── Monitoramento automático / GPS ──
-    // Estas opções não alteram o modelo, as classes, nem a inferência YOLO.
-    var automaticAnalysisEnabled: Boolean
-        get() = prefs.getBoolean("automatic_analysis_enabled", true)
-        set(v) = prefs.edit().putBoolean("automatic_analysis_enabled", v).apply()
-
-    var walkingMonitoringEnabled: Boolean
-        get() = prefs.getBoolean("walking_monitoring_enabled", false)
-        set(v) = prefs.edit().putBoolean("walking_monitoring_enabled", v).apply()
-
-    var voiceNavigationEnabled: Boolean
-        get() = prefs.getBoolean("voice_navigation_enabled", true)
-        set(v) = prefs.edit().putBoolean("voice_navigation_enabled", v).apply()
-
-    var crossingAlertDistanceMeters: Int
-        get() = prefs.getInt("crossing_alert_distance_m", 30).coerceIn(10, 80)
-        set(v) = prefs.edit().putInt("crossing_alert_distance_m", v.coerceIn(10, 80)).apply()
-
-    var crossingQueryRadiusMeters: Int
-        get() = prefs.getInt("crossing_query_radius_m", 100).coerceIn(50, 250)
-        set(v) = prefs.edit().putInt("crossing_query_radius_m", v.coerceIn(50, 250)).apply()
-
-    var locationUpdateIntervalSeconds: Int
-        get() = prefs.getInt("location_update_interval_s", 8).coerceIn(3, 60)
-        set(v) = prefs.edit().putInt("location_update_interval_s", v.coerceIn(3, 60)).apply()
-
-    var maximumLocationAccuracyMeters: Float
-        get() = prefs.getFloat("maximum_location_accuracy_m", 35f).coerceIn(10f, 100f)
-        set(v) = prefs.edit().putFloat("maximum_location_accuracy_m", v.coerceIn(10f, 100f)).apply()
-
-    var automaticAnalysisCooldownSeconds: Int
-        get() = prefs.getInt("automatic_analysis_cooldown_s", 90).coerceIn(30, 300)
-        set(v) = prefs.edit().putInt("automatic_analysis_cooldown_s", v.coerceIn(30, 300)).apply()
-
-    var crossingExitHysteresisMeters: Int
-        get() = prefs.getInt("crossing_exit_hysteresis_m", 15).coerceIn(5, 50)
-        set(v) = prefs.edit().putInt("crossing_exit_hysteresis_m", v.coerceIn(5, 50)).apply()
-
-    var automaticAnalysisDurationSeconds: Int
-        get() = prefs.getInt("automatic_analysis_duration_s", 45).coerceIn(15, 120)
-        set(v) = prefs.edit().putInt("automatic_analysis_duration_s", v.coerceIn(15, 120)).apply()
+    var automaticRoadDetection: Boolean
+        get() = prefs.getBoolean("automatic_road_detection", false)
+        set(v) = prefs.edit().putBoolean("automatic_road_detection", v).apply()
+    var cameraSource: Int
+        get() = prefs.getInt("camera_source",0).coerceIn(0,2)
+        set(v) = prefs.edit().putInt("camera_source",v.coerceIn(0,2)).apply()
+    var roadDebugOverlay: Boolean
+        get() = prefs.getBoolean("road_debug_overlay", false)
+        set(v) = prefs.edit().putBoolean("road_debug_overlay", v).apply()
+    var roadSegmentationFps: Int
+        get() = prefs.getInt("road_segmentation_fps", 2).coerceIn(1,5)
+        set(v) = prefs.edit().putInt("road_segmentation_fps", v.coerceIn(1,5)).apply()
+    var roadYoloFps: Int
+        get() = prefs.getInt("road_yolo_fps", 15).coerceIn(1,30)
+        set(v) = prefs.edit().putInt("road_yolo_fps", v.coerceIn(1,30)).apply()
+    var roadConfirmationMs: Int
+        get() = prefs.getInt("road_confirmation_ms", 1500).coerceIn(500,5000)
+        set(v) = prefs.edit().putInt("road_confirmation_ms", v.coerceIn(500,5000)).apply()
+    var roadHoldMs: Int
+        get() = prefs.getInt("road_hold_ms", 10000).coerceIn(5000,60000)
+        set(v) = prefs.edit().putInt("road_hold_ms", v.coerceIn(5000,60000)).apply()
+    var roadCooldownMs: Int
+        get() = prefs.getInt("road_cooldown_ms", 15000).coerceIn(5000,60000)
+        set(v) = prefs.edit().putInt("road_cooldown_ms", v.coerceIn(5000,60000)).apply()
 
     // ── Classes do modelo ──
     val keywordsVeiculos      = setOf("car", "motorcycle", "bicycle", "truck", "bus")
@@ -225,12 +208,6 @@ class AppConfig(context: Context) {
     var faixaMargemAlinhamento: Float
         get()  = prefs.getFloat("faixa_margem_alinhamento", 0.10f)
         set(v) = prefs.edit().putFloat("faixa_margem_alinhamento", v).apply()
-
-    // ── Heartbeat ──
-    // Intervalo maior = menos interrupções de voz
-    var heartbeatInterval: Float
-        get()  = prefs.getFloat("heartbeat_interval", 8.0f)
-        set(v) = prefs.edit().putFloat("heartbeat_interval", v).apply()
 
     // ── Volume ──
     var volumeVoz: Float

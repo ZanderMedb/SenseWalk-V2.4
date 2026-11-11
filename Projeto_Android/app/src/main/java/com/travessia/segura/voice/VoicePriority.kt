@@ -2,7 +2,6 @@ package com.travessia.segura.voice
 
 enum class VoicePriority(val weight: Int) {
     INFO(10),
-    NAVIGATION(30),
     CROSSING(60),
     SAFETY(100)
 }
@@ -11,7 +10,9 @@ data class ScheduledVoiceMessage(
     val key: String,
     val text: String,
     val priority: VoicePriority,
-    val timestampMs: Long
+    val timestampMs: Long,
+    val stateTopic: String? = null,
+    val stateValue: String? = null
 )
 
 /** Pequena fila determinística, separada do Android TTS para testes locais. */
@@ -38,4 +39,8 @@ class VoiceMessageScheduler(private val maxSize: Int = 3) {
 
     @Synchronized
     fun size(): Int = queue.size
+
+    @Synchronized fun contains(key: String): Boolean = queue.any { it.key == key }
+    @Synchronized fun remove(key: String) { queue.removeAll { it.key == key } }
+    @Synchronized fun removePrefix(prefix: String) { queue.removeAll { it.key.startsWith(prefix) } }
 }

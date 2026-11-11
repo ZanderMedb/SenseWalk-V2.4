@@ -23,7 +23,8 @@ class FrameAnalyzer(
     private val stateMachine: StateMachine,
     private val benchmarkLogger: BenchmarkLogger,
     private val onStatusUpdate: (String, String, Int, String) -> Unit,
-    private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int) -> Unit
+    private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int) -> Unit,
+    private val coordinator: com.travessia.segura.road.InferenceCoordinator? = null
 ) : ImageAnalysis.Analyzer {
 
     companion object {
@@ -34,7 +35,7 @@ class FrameAnalyzer(
     private val opticalFlow = SparseOpticalFlowEstimator()
 
     override fun analyze(imageProxy: ImageProxy) {
-        if (stateMachine.estado == AppConfig.EST_INATIVO || !detector.isReady) {
+        if ((stateMachine.estado == AppConfig.EST_INATIVO && coordinator?.running != true) || !detector.isReady) {
             imageProxy.close()
             return
         }
@@ -43,18 +44,21 @@ class FrameAnalyzer(
             val rotation = imageProxy.imageInfo.rotationDegrees
             val bitmap = ImageUtils.imageProxyToBitmap(imageProxy) ?: return
             try {
-                processarFrame(bitmap, rotation)
+                if (coordinator != null) coordinator.process(bitmap, rotation, imageProxy.imageInfo.timestamp / 1_000_000) {
+                    processarFrame(bitmap, rotation, imageProxy.imageInfo.timestamp / 1_000_000)
+                } else processarFrame(bitmap, rotation, imageProxy.imageInfo.timestamp / 1_000_000)
             } finally {
                 bitmap.recycle()
             }
         } catch (e: Exception) {
+            coordinator?.reportVideoError()
             Log.e(TAG, "Erro ao processar frame: ${e.message}", e)
         } finally {
             imageProxy.close()
         }
     }
 
-    private fun processarFrame(bitmap: Bitmap, rotation: Int) {
+    private fun processarFrame(bitmap: Bitmap, rotation: Int, capturedAtMs: Long) {
         val frameStarted = SystemClock.elapsedRealtimeNanos()
         frameCount++
         val timestampMs = System.currentTimeMillis()
@@ -74,8 +78,10 @@ class FrameAnalyzer(
 
         // 1) YOLO. O modelo atual continua intocado para isolarmos o ganho do pipeline.
         val rawDetections = detector.detectar(bitmap, config.confMinima, rotation)
+        if (SystemClock.elapsedRealtime() - capturedAtMs > 1500) { coordinator?.reportStaleResult(); return }
         val rawVeiculos = rawDetections.filter { config.categorizarClasse(it.className) == "veiculo" }
         val contexto = rawDetections.filter { config.categorizarClasse(it.className) != "veiculo" }
+        coordinator?.observeYolo(rawVeiculos.isNotEmpty() || contexto.isNotEmpty())
 
         // 2) Tracker V2.4 em duas etapas, já compensado pela translação da câmera.
         vehicleTracker.configure(config.trackerCenterDistancePct, config.trackerGhostFrames)
@@ -199,6 +205,7 @@ class FrameAnalyzer(
             hf = hf
         )
 
+        coordinator?.completedYoloFrame()
         onStatusUpdate(
             stateMachine.estado,
             stateMachine.situacaoAtual,

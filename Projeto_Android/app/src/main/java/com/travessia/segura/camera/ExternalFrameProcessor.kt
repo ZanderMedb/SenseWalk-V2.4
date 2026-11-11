@@ -22,7 +22,8 @@ class ExternalFrameProcessor(
     private val stateMachine: StateMachine,
     private val benchmarkLogger: BenchmarkLogger,
     private val onStatusUpdate: (String, String, Int, String) -> Unit,
-    private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int) -> Unit
+    private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int) -> Unit,
+    private val coordinator: com.travessia.segura.road.InferenceCoordinator? = null
 ) {
     companion object {
         private const val TAG = "ExternalFrameProcessor"
@@ -31,16 +32,18 @@ class ExternalFrameProcessor(
     private var frameCount = 0L
     private val opticalFlow = SparseOpticalFlowEstimator()
 
-    fun processarFrame(bitmap: Bitmap, overlayRotation: Int = 0) {
-        if (stateMachine.estado == AppConfig.EST_INATIVO || !detector.isReady) return
+    fun processarFrame(bitmap: Bitmap, overlayRotation: Int = 0, capturedAtMs: Long = SystemClock.elapsedRealtime()) {
+        if ((stateMachine.estado == AppConfig.EST_INATIVO && coordinator?.running != true) || !detector.isReady) return
         try {
-            processarInterno(bitmap, overlayRotation)
+            if (coordinator != null) coordinator.process(bitmap, 0, capturedAtMs) { processarInterno(bitmap, overlayRotation, capturedAtMs) }
+            else processarInterno(bitmap, overlayRotation, capturedAtMs)
         } catch (e: Exception) {
+            coordinator?.reportVideoError()
             Log.e(TAG, "Erro ao processar frame externo: ${e.message}", e)
         }
     }
 
-    private fun processarInterno(bitmap: Bitmap, overlayRotation: Int) {
+    private fun processarInterno(bitmap: Bitmap, overlayRotation: Int, capturedAtMs: Long) {
         val frameStarted = SystemClock.elapsedRealtimeNanos()
         frameCount++
         val timestampMs = System.currentTimeMillis()
@@ -58,8 +61,10 @@ class ExternalFrameProcessor(
         val appliedDy = if (useMotion) motion.dy else 0f
 
         val rawDetections = detector.detectar(bitmap, config.confMinima, 0)
+        if (SystemClock.elapsedRealtime() - capturedAtMs > 1500) { coordinator?.reportStaleResult(); return }
         val rawVeiculos = rawDetections.filter { config.categorizarClasse(it.className) == "veiculo" }
         val contexto = rawDetections.filter { config.categorizarClasse(it.className) != "veiculo" }
+        coordinator?.observeYolo(rawVeiculos.isNotEmpty() || contexto.isNotEmpty())
 
         vehicleTracker.configure(config.trackerCenterDistancePct, config.trackerGhostFrames)
         val trackedVehicles = vehicleTracker.update(rawVeiculos, wf, hf, appliedDx, appliedDy)
@@ -180,6 +185,7 @@ class ExternalFrameProcessor(
             hf = hf
         )
 
+        coordinator?.completedYoloFrame()
         onStatusUpdate(
             stateMachine.estado,
             stateMachine.situacaoAtual,

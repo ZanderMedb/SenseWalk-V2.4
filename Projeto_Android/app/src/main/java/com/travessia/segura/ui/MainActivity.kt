@@ -40,18 +40,6 @@ import com.travessia.segura.logic.StateMachine
 import com.travessia.segura.tracking.Rastreador
 import com.travessia.segura.voice.VoiceSystem
 import com.travessia.segura.voice.VoiceCommandController
-import com.travessia.segura.voice.VoiceNavigationManager
-import com.travessia.segura.context.CrossingAnalysisCoordinator
-import com.travessia.segura.context.MonitoringState
-import com.travessia.segura.navigation.CrossingMapRepository
-import com.travessia.segura.navigation.DestinationPlace
-import com.travessia.segura.navigation.GeoPoint
-import com.travessia.segura.navigation.GraphHopperRouteRepository
-import com.travessia.segura.navigation.LocationSnapshot
-import com.travessia.segura.navigation.NavigationManager
-import com.travessia.segura.navigation.NavigationSessionStore
-import com.travessia.segura.navigation.PedestrianRoute
-import com.travessia.segura.location.LocationService
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -69,11 +57,13 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         private const val CAMERA_PERMISSION_CODE = 100
         private const val MICROPHONE_PERMISSION_CODE = 101
-        private const val MONITORING_PERMISSION_CODE = 102
+        private const val ROAD_MICROPHONE_PERMISSION_CODE = 103
+        private const val USB_CAMERA_PERMISSION_CODE = 104
 
         // Modos de câmera
         const val MODE_LOCAL_CAMERA = 0
         const val MODE_X5_CAMERA = 1
+        const val MODE_USB_CAMERA = 2
     }
 
     // UI
@@ -90,11 +80,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConfig: Button
     private lateinit var btnSource: Button
     private lateinit var btnVoice: Button
-    private lateinit var btnNavigation: Button
     private lateinit var statusBar: View
     private lateinit var bottomPanel: View
 
     private var externalImageView: ImageView? = null
+    private var externalPreviewBitmap: Bitmap? = null
 
     // Engine
     private lateinit var config: AppConfig
@@ -106,10 +96,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var stateMachine: StateMachine
     private lateinit var benchmarkLogger: BenchmarkLogger
     private lateinit var cameraExecutor: ExecutorService
-    private val activityScope = MainScope()
-    private var crossingCoordinator: CrossingAnalysisCoordinator? = null
-    private var foregroundNavigationManager: NavigationManager? = null
-    private var foregroundNavigationRoute: PedestrianRoute? = null
+    private lateinit var roadCoordinator: com.travessia.segura.road.InferenceCoordinator
+    private lateinit var crossingConsent: com.travessia.segura.road.CrossingConsentController
+    private var roadMicRequested = false
+    private var foreground = false
+    private var lastRoadState: com.travessia.segura.road.AnalysisState? = null
+    private var announcedYoloStarted = false
+    private val videoWatchdog = object : Runnable {
+        override fun run() {
+            if (!foreground || !::roadCoordinator.isInitialized) return
+            val last = roadCoordinator.lastFrameArrivalMs
+            if ((isActive || roadCoordinator.running) && last > 0 && SystemClock.elapsedRealtime() - last > 3000) {
+                overlayView.clear(); roadCoordinator.reportVideoError()
+            }
+            window.decorView.postDelayed(this, 1000)
+        }
+    }
 
     // CameraX (modo local)
     private var frameAnalyzer: FrameAnalyzer? = null
@@ -119,20 +121,19 @@ class MainActivity : AppCompatActivity() {
     // X5 RTSP (experimental). It reuses the external processor, so no second detector exists.
     private lateinit var x5Config: X5CameraConfig
     private var x5Client: X5CameraClient? = null
+    private var usbClient: com.travessia.segura.camera.UsbCameraClient? = null
     private var x5Scope: CoroutineScope? = null
     private var x5FrameChannel: Channel<VideoFrame>? = null
     @Volatile private var lastX5FrameNanos = 0L
     @Volatile private var x5StaleReported = false
 
     // Estado
-    private var isActive = false
+    @Volatile private var isActive = false
     private var cameraMode = MODE_LOCAL_CAMERA
     private var lastVehicleCount = 0
     private var lastSituation = "VERIFICANDO"
     private var autoListenTriggered = false
     private var pendingVoiceStart = false
-    private var pendingAutomaticStart = false
-    private var analysisStartedAutomatically = false
 
     // FPS
     private var frameCount = 0
@@ -167,6 +168,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         config = AppConfig(this)
+        cameraMode = config.cameraSource
         x5Config = X5CameraConfig(this)
         benchmarkLogger = BenchmarkLogger(this)
         initViews()
@@ -189,7 +191,6 @@ class MainActivity : AppCompatActivity() {
         btnConfig = findViewById(R.id.btnConfig)
         btnSource = findViewById(R.id.btnSource)
         btnVoice = findViewById(R.id.btnVoice)
-        btnNavigation = findViewById(R.id.btnNavigation)
         statusBar = findViewById(R.id.statusBar)
         bottomPanel = findViewById(R.id.bottomPanel)
 
@@ -202,9 +203,6 @@ class MainActivity : AppCompatActivity() {
         }
         btnSource.setOnClickListener { alternarFonte() }
         btnVoice.setOnClickListener { startVoiceCommand() }
-        btnNavigation.setOnClickListener {
-            startActivity(Intent(this, NavigationActivity::class.java))
-        }
 
         tvAlertStatus.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         tvEstado.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -220,77 +218,57 @@ class MainActivity : AppCompatActivity() {
     private fun initEngine() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         voz = VoiceSystem(this, config)
-        crossingCoordinator = CrossingAnalysisCoordinator(
-            context = this,
-            config = config,
-            scope = activityScope,
-            repository = CrossingMapRepository(),
-            voice = VoiceNavigationManager(config, voz),
-            listener = object : CrossingAnalysisCoordinator.Listener {
-                override fun onMonitoringState(state: MonitoringState) {
-                    runOnUiThread {
-                        if (!isActive) tvAlertStatus.text = when (state) {
-                            MonitoringState.STOPPED -> "Monitoramento automático desligado"
-                            MonitoringState.STATIONARY -> "Monitoramento: usuário parado"
-                            MonitoringState.WALKING -> "Monitoramento: caminhando"
-                            MonitoringState.POSSIBLE_CROSSING -> "Possível travessia mapeada"
-                            MonitoringState.ANALYSING_CROSSING -> "IA analisando travessia"
-                        }
-                    }
-                }
-
-                override fun onLocationStatus(message: String) {
-                    runOnUiThread { tvInfo.text = message }
-                }
-
-                override fun startCrossingAnalysis() {
-                    runOnUiThread {
-                        if (!isActive) {
-                            if (btnToggle.isEnabled) {
-                                analysisStartedAutomatically = true
-                                setAnalysisActive(true, automatic = true)
-                            } else {
-                                pendingAutomaticStart = true
-                            }
-                        }
-                    }
-                }
-
-                override fun stopCrossingAnalysis() {
-                    runOnUiThread {
-                        if (isActive && analysisStartedAutomatically) setAnalysisActive(false, automatic = true)
-                    }
+        crossingConsent = com.travessia.segura.road.CrossingConsentController(this, voz) { config.appLanguage }
+        roadCoordinator = com.travessia.segura.road.InferenceCoordinator(this, config,
+            manual = { isActive },
+            onYoloState = { enabled ->
+                if (::stateMachine.isInitialized &&
+                    ((enabled && stateMachine.estado == EST_INATIVO) || (!enabled && stateMachine.estado != EST_INATIVO))) {
+                    stateMachine.entrarEstado(if (enabled) EST_RECONHECENDO else EST_INATIVO)
                 }
             },
-            activeRoute = { NavigationSessionStore.currentRoute }
-        )
-        foregroundNavigationManager = NavigationManager(
-            locationService = LocationService(this, config),
-            voice = VoiceNavigationManager(config, voz),
-            routeRepository = GraphHopperRouteRepository(),
-            listener = object : NavigationManager.Listener {
-                override fun onStatus(message: String) {
-                    runOnUiThread { tvInfo.text = message }
-                }
-
-                override fun onRoute(route: PedestrianRoute) {
-                    foregroundNavigationRoute = route
-                }
-
-                override fun onLocation(snapshot: LocationSnapshot) = Unit
-
-                override fun onRecalculateRequested(origin: GeoPoint, destination: DestinationPlace) {
-                    activityScope.launch {
-                        GraphHopperRouteRepository().route(origin, destination).onSuccess { route ->
-                            foregroundNavigationManager?.setRoute(route)
-                            VoiceNavigationManager(config, voz).navigation("route_recalculated", "Rota recalculada.")
-                        }.onFailure {
-                            runOnUiThread { tvInfo.text = "Não foi possível recalcular a rota: ${it.message}" }
-                        }
+            onDebug = { frame -> runOnUiThread {
+                if (foreground) {
+                    val contextOnly = frame.reason == "ffnet_stale" && roadCoordinator.hasRecentYoloResult
+                    if ((frame.reason in setOf("stale_frame","ffnet_stale") && !contextOnly) || frame.state == com.travessia.segura.road.AnalysisState.ERROR) overlayView.clear()
+                    overlayView.updateRoad(frame)
+                    val messageState = when {
+                        contextOnly -> "context_only"
+                        frame.reason in setOf("stale_frame","ffnet_stale") -> "stale_frame"
+                        frame.state == com.travessia.segura.road.AnalysisState.ACTIVE_ANALYSIS && roadCoordinator.successfulYoloFrames == 0L -> "STARTING_ANALYSIS"
+                        else -> frame.state.name
                     }
+                    val message = com.travessia.segura.road.RoadText.get(config.appLanguage, messageState)
+                    val status = message + listOfNotNull(
+                        if (frame.result?.roadDetected == true) com.travessia.segura.road.RoadText.get(config.appLanguage, "road") else null,
+                        if (frame.result?.sidewalkDetected == true) com.travessia.segura.road.RoadText.get(config.appLanguage, "sidewalk") else null
+                    ).joinToString(prefix = " ", separator = " / ")
+                    if (tvInfo.text.toString() != status) tvInfo.text = status
+                    if (frame.state == com.travessia.segura.road.AnalysisState.AWAITING_CONFIRMATION && !isActive && !crossingConsent.active &&
+                        lastRoadState != frame.state) {
+                        voiceCommands.cancel()
+                        announcedYoloStarted = false
+                        crossingConsent.ask { accepted -> cameraExecutor.execute {
+                            val started = roadCoordinator.answerCrossing(accepted)
+                            if (accepted && !started) runOnUiThread {
+                                if (foreground) voz.forcar("crossing_stale", com.travessia.segura.road.RoadText.get(config.appLanguage,"unheard"))
+                            }
+                        } }
+                    } else if (frame.state != com.travessia.segura.road.AnalysisState.AWAITING_CONFIRMATION && crossingConsent.active && frame.reason !in setOf("stale_frame","ffnet_stale")) {
+                        crossingConsent.cancel()
+                        cameraExecutor.execute { roadCoordinator.answerCrossing(false) }
+                    }
+                    if (frame.state in setOf(
+                            com.travessia.segura.road.AnalysisState.ERROR,
+                            com.travessia.segura.road.AnalysisState.INCONCLUSIVE) && !crossingConsent.active && !contextOnly) {
+                        voz.falarEstado("road_status",messageState,message,com.travessia.segura.voice.VoicePriority.INFO,
+                            settleMs=if (frame.state == com.travessia.segura.road.AnalysisState.ERROR) 0 else 1500)
+                    } else if (!crossingConsent.active) {
+                        voz.observarEstado("road_status","healthy",1500)
+                    }
+                    lastRoadState = frame.state
                 }
-            }
-        )
+            } })
 
         Thread {
             detector = YoloDetector(
@@ -323,9 +301,10 @@ class MainActivity : AppCompatActivity() {
                         },
                         onOverlayUpdate = { boxes, w, h, rot ->
                             runOnUiThread {
-                                overlayView.updateDetections(boxes, w, h, rot)
+                                if (foreground) overlayView.updateDetections(boxes, w, h, rot)
                             }
-                        }
+                        },
+                        coordinator = roadCoordinator
                     )
 
                     // Preparar FrameAnalyzer para câmera local
@@ -343,27 +322,24 @@ class MainActivity : AppCompatActivity() {
                         },
                         onOverlayUpdate = { boxes, w, h, rot ->
                             runOnUiThread {
-                                overlayView.updateDetections(boxes, w, h, rot)
+                                if (foreground) overlayView.updateDetections(boxes, w, h, rot)
                             }
-                        }
+                        },
+                        coordinator = roadCoordinator
                     )
 
                     tvInfo.text = tr("ready_wifi")
                     btnToggle.isEnabled = true
 
-                    configurarFonte()
+                    if (foreground) { configurarFonte(); resumeRoadMonitoring() }
                     if (pendingVoiceStart) {
                         pendingVoiceStart = false
                         setAnalysisActive(true)
                     }
-                    if (pendingAutomaticStart) {
-                        pendingAutomaticStart = false
-                        analysisStartedAutomatically = true
-                        setAnalysisActive(true, automatic = true)
-                    }
 
                 } else {
                     tvInfo.text = tr("model_error")
+                    voz.forcar("model_unavailable", tr("model_error"))
                     Log.e(TAG, "Falha ao inicializar detector")
                 }
             }
@@ -412,6 +388,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startVoiceCommand() {
+        if (crossingConsent.active) return
         if (!config.voiceCommandsEnabled) return
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
@@ -449,6 +426,8 @@ class MainActivity : AppCompatActivity() {
             VoiceCommandController.Command.STOP -> {
                 if (isActive) {
                     setAnalysisActive(false)
+                } else if (roadCoordinator.running) {
+                    toggleAnalysis()
                 } else {
                     voz.forcar("voice_state", tr("voice_already_inactive"))
                 }
@@ -470,7 +449,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selecionarFontePorVoz(mode: Int) {
-        if (isActive) {
+        if (isActive || roadCoordinator.running) {
             voz.forcar("voice_source", tr("voice_stop_before_source"))
             return
         }
@@ -487,6 +466,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun falarStatus() {
+        if (roadCoordinator.running && !isActive) {
+            voz.forcar("voice_status", com.travessia.segura.road.RoadText.get(config.appLanguage,
+                lastRoadState?.name ?: "MONITORING"))
+            return
+        }
         val source = if (cameraMode == MODE_LOCAL_CAMERA) tr("voice_source_phone") else tr("voice_source_external")
         val msg = if (isActive) {
             tr("voice_status_active").format(source, lastVehicleCount, situacaoExibida(lastSituation))
@@ -501,20 +485,24 @@ class MainActivity : AppCompatActivity() {
     // ================================================================
 
     private fun alternarFonte() {
-        if (isActive) {
+        if (isActive || roadCoordinator.running) {
             Toast.makeText(this, tr("stop_before_source"), Toast.LENGTH_SHORT).show()
             return
         }
 
-        cameraMode = if (cameraMode == MODE_LOCAL_CAMERA) MODE_X5_CAMERA else MODE_LOCAL_CAMERA
-        atualizarUIFonte()
-        configurarFonte()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(tr("accessibility_source"))
+            .setItems(arrayOf(tr("source_local"), "X5 Wi-Fi", "USB / UVC")) { _, selected ->
+                pararUsb(); pararX5(); pararCameraLocal()
+                cameraMode = selected; config.cameraSource = selected
+                overlayView.clear(); atualizarUIFonte(); configurarFonte()
+            }.show()
     }
 
     private fun atualizarUIFonte() {
         when (cameraMode) {
-            MODE_X5_CAMERA -> {
-                btnSource.text = "X5"
+            MODE_X5_CAMERA, MODE_USB_CAMERA -> {
+                btnSource.text = if (cameraMode == MODE_USB_CAMERA) "USB" else "X5"
                 previewView.visibility = View.GONE
                 externalImageView?.visibility = View.VISIBLE
             }
@@ -529,8 +517,9 @@ class MainActivity : AppCompatActivity() {
     private fun configurarFonte() {
         aplicarPreferenciasVisuais()
         when (cameraMode) {
-            MODE_X5_CAMERA -> configurarX5()
-            MODE_LOCAL_CAMERA -> configurarCameraLocal()
+            MODE_X5_CAMERA -> { pararUsb(); configurarX5() }
+            MODE_LOCAL_CAMERA -> { pararUsb(); configurarCameraLocal() }
+            MODE_USB_CAMERA -> configurarUsb()
         }
     }
 
@@ -585,7 +574,7 @@ class MainActivity : AppCompatActivity() {
 
         externalImageView?.scaleType = ImageView.ScaleType.CENTER_CROP
 
-        overlayView.visibility = if (config.mostrarOverlay) View.VISIBLE else View.GONE
+        overlayView.visibility = if (config.mostrarOverlay || config.roadDebugOverlay) View.VISIBLE else View.GONE
         statusBar.visibility = if (config.mostrarPainelSuperior) View.VISIBLE else View.GONE
         bottomPanel.visibility = if (config.mostrarPainelInferior) View.VISIBLE else View.GONE
         btnVoice.visibility = if (config.voiceCommandsEnabled) View.VISIBLE else View.GONE
@@ -602,7 +591,6 @@ class MainActivity : AppCompatActivity() {
         btnSource.contentDescription = tr("accessibility_source")
         btnVoice.contentDescription = tr("voice_button_description")
         btnConfig.contentDescription = tr("accessibility_settings")
-        btnNavigation.contentDescription = "Abrir navegação acessível"
 
         if (!isActive) {
             tvAlertStatus.text = tr("waiting_camera")
@@ -614,18 +602,21 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        foreground = true
+        window.decorView.removeCallbacks(videoWatchdog)
+        window.decorView.postDelayed(videoWatchdog, 1000)
         if (::config.isInitialized) {
             aplicarTextoBase()
             atualizarUIFonte()
             aplicarPreferenciasVisuais()
+            if (btnToggle.isEnabled && cameraMode == MODE_USB_CAMERA) configurarUsb()
+            resumeRoadMonitoring()
             if (::vehicleTracker.isInitialized) {
                 vehicleTracker.configure(
                     centerDistancePct = config.trackerCenterDistancePct,
                     ghostFrameCount = config.trackerGhostFrames
                 )
             }
-            resumeNavigationInMain()
-            startAutomaticMonitoring()
 
             // Temporarily disabled during X5 diagnostics; manual voice activation remains available.
             // if (config.voiceCommandsEnabled && config.voiceAutoListen && !autoListenTriggered &&
@@ -656,7 +647,7 @@ class MainActivity : AppCompatActivity() {
         x5Client = X5CameraClient(
             connectivityManager = connectivity,
             config = x5Config,
-            onFrame = { frame -> receberFrameX5(frame) },
+            onFrame = { frame -> if (cameraMode == MODE_X5_CAMERA) receberFrameX5(frame) else frame.bitmap.recycle() },
             onStateChanged = { state, message -> atualizarEstadoX5(state, message) },
             onFpsUpdate = { fps -> runOnUiThread { tvFps.text = "$fps FPS" } }
         )
@@ -671,12 +662,18 @@ class MainActivity : AppCompatActivity() {
                 .also { frame.bitmap.recycle() }
         }
         val normalized = VideoFrame(bitmap, frame.timestampNanos, 0)
+        val previewBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
         lastX5FrameNanos = normalized.timestampNanos
         x5StaleReported = false
         runOnUiThread {
-            if (cameraMode == MODE_X5_CAMERA) externalImageView?.setImageBitmap(bitmap)
+            if (cameraMode != MODE_LOCAL_CAMERA && foreground && !isDestroyed) {
+                externalImageView?.setImageBitmap(previewBitmap)
+                externalPreviewBitmap?.recycle()
+                externalPreviewBitmap = previewBitmap
+            } else previewBitmap.recycle()
         }
-        if (isActive && cameraMode == MODE_X5_CAMERA) x5FrameChannel?.trySend(normalized)
+        val sent = if ((isActive || roadCoordinator.running) && cameraMode != MODE_LOCAL_CAMERA) x5FrameChannel?.trySend(normalized)?.isSuccess == true else false
+        if (!sent) bitmap.recycle()
     }
 
     private fun atualizarEstadoX5(state: X5StreamState, message: String) {
@@ -691,25 +688,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun iniciarX5() {
+        iniciarProcessamentoExterno()
+        x5Client?.start()
+    }
+
+    private fun iniciarProcessamentoExterno() {
         pararX5()
         lastX5FrameNanos = 0L
         x5StaleReported = false
-        x5FrameChannel = Channel(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        x5FrameChannel = Channel(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST,
+            onUndeliveredElement = { it.bitmap.recycle() })
         x5Scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val channel = x5FrameChannel
         x5Scope?.launch {
             if (channel != null) for (frame in channel) {
-                if (!isActive || cameraMode != MODE_X5_CAMERA) continue
+                try {
+                if ((!isActive && !roadCoordinator.running) || cameraMode == MODE_LOCAL_CAMERA) continue
                 if (X5Protocol.isStale(frame.timestampNanos, SystemClock.elapsedRealtimeNanos(), x5Config.staleFrameMs)) {
-                    withContext(Dispatchers.Main) { invalidarVideoExterno("Frame X5 vencido") }
+                    withContext(Dispatchers.Main) { invalidarVideoExterno("Frame externo vencido") }
                     continue
                 }
                 // The bitmap was rotated exactly once before preview and inference.
-                externalProcessor?.processarFrame(frame.bitmap, overlayRotation = 0)
+                externalProcessor?.processarFrame(frame.bitmap, overlayRotation = 0, capturedAtMs = frame.timestampNanos / 1_000_000)
+                } finally { frame.bitmap.recycle() }
             }
         }
         x5Scope?.launch {
-            while (isActive && cameraMode == MODE_X5_CAMERA) {
+            while ((isActive || roadCoordinator.running) && cameraMode != MODE_LOCAL_CAMERA) {
                 delay(500L)
                 if (lastX5FrameNanos != 0L && X5Protocol.isStale(
                         lastX5FrameNanos, SystemClock.elapsedRealtimeNanos(), x5Config.staleFrameMs
@@ -723,21 +728,23 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        x5Client?.start()
     }
 
     private fun pararX5() {
         x5Client?.stop()
-        x5FrameChannel?.close()
+        x5FrameChannel?.cancel()
         x5FrameChannel = null
         x5Scope?.cancel()
         x5Scope = null
         lastX5FrameNanos = 0L
         x5StaleReported = false
+        externalImageView?.setImageBitmap(null)
+        externalPreviewBitmap?.recycle(); externalPreviewBitmap = null
     }
 
     private fun invalidarVideoExterno(reason: String) {
-        if (cameraMode != MODE_X5_CAMERA) return
+        roadCoordinator.reportVideoError()
+        if (cameraMode == MODE_LOCAL_CAMERA) return
         overlayView.clear()
         externalProcessor?.resetar()
         if (::stateMachine.isInitialized && isActive) stateMachine.entrarEstado(EST_RECONHECENDO)
@@ -798,12 +805,15 @@ class MainActivity : AppCompatActivity() {
 
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(
+                val camera = provider.bindToLifecycle(
                     this,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     preview,
                     analysis
                 )
+                camera.cameraInfo.cameraState.observe(this) { state ->
+                    if (state.error != null) { overlayView.clear(); roadCoordinator.reportVideoError() }
+                }
                 Log.i(TAG, "Camera local iniciada")
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao iniciar camera: ${e.message}")
@@ -818,25 +828,40 @@ class MainActivity : AppCompatActivity() {
     // ================================================================
 
     private fun toggleAnalysis() {
-        setAnalysisActive(!isActive, automatic = false)
+        crossingConsent.cancel()
+        if (!isActive && roadCoordinator.running) {
+            config.automaticRoadDetection = false
+            roadCoordinator.suspendMonitoring()
+            cameraExecutor.execute { roadCoordinator.release() }
+            if (::stateMachine.isInitialized) stateMachine.entrarEstado(EST_INATIVO)
+            pararUsb(); pararX5(); overlayView.clear()
+            btnToggle.text = tr("start")
+            return
+        }
+        setAnalysisActive(!isActive)
     }
 
-    private fun setAnalysisActive(active: Boolean, automatic: Boolean = false) {
+    private fun setAnalysisActive(active: Boolean) {
+        crossingConsent.cancel()
+        if (active) cameraExecutor.execute { roadCoordinator.answerCrossing(false) }
+        if (!active && ::roadCoordinator.isInitialized && roadCoordinator.running) {
+            config.automaticRoadDetection = false
+            roadCoordinator.suspendMonitoring()
+            cameraExecutor.execute { roadCoordinator.release() }
+        }
         if (active == isActive) return
         isActive = active
 
         if (isActive) {
-            analysisStartedAutomatically = automatic
             if (config.benchmarkEnabled) {
-                val source = if (cameraMode == MODE_LOCAL_CAMERA) "phone" else "x5_rtsp"
+                val source = when(cameraMode) { MODE_LOCAL_CAMERA -> "phone"; MODE_USB_CAMERA -> "usb_uvc"; else -> "x5_rtsp" }
                 benchmarkLogger.startSession(source)
             }
             // Começar cada sessão sem IDs/histórico herdados da sessão anterior.
             frameAnalyzer?.resetar()
             externalProcessor?.resetar()
             stateMachine.entrarEstado(EST_RECONHECENDO)
-            // A fala de contexto já informou a ativação automática; não a interrompa.
-            if (!automatic) voz.forcar("inicio", tr("analysis_start_voice"))
+            voz.forcar("inicio", tr("analysis_start_voice"))
             btnToggle.text = tr("stop")
             btnToggle.contentDescription = tr("accessibility_stop")
             tvAlertStatus.text = tr("analysis_running")
@@ -844,6 +869,7 @@ class MainActivity : AppCompatActivity() {
 
             when (cameraMode) {
                 MODE_X5_CAMERA -> iniciarX5()
+                MODE_USB_CAMERA -> configurarUsb()
                 MODE_LOCAL_CAMERA -> tvInfo.text = tr("analyzing")
             }
 
@@ -851,7 +877,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             val benchmarkResult = benchmarkLogger.stopSession()
             stateMachine.entrarEstado(EST_INATIVO)
-            if (!automatic) voz.forcar("cancelado", tr("analysis_stop_voice"))
+            voz.forcar("cancelado", tr("analysis_stop_voice"))
             btnToggle.text = tr("start")
             btnToggle.contentDescription = tr("accessibility_start")
             tvAlertStatus.text = tr("analysis_paused")
@@ -868,9 +894,8 @@ class MainActivity : AppCompatActivity() {
             overlayView.clear()
             frameAnalyzer?.resetar()
             externalProcessor?.resetar()
-            if (cameraMode == MODE_X5_CAMERA) pararX5()
-            if (!automatic) crossingCoordinator?.notifyManualAnalysisStopped()
-            analysisStartedAutomatically = false
+            if (cameraMode == MODE_X5_CAMERA && !roadCoordinator.running) pararX5()
+            if (cameraMode == MODE_USB_CAMERA && !roadCoordinator.running) pararUsb()
 
             Log.i(TAG, "Análise parada")
         }
@@ -881,9 +906,17 @@ class MainActivity : AppCompatActivity() {
     // ================================================================
 
     private fun atualizarUI(estado: String, situacao: String, nVeiculos: Int, semCor: String) {
+        if (!foreground) return
+        if (roadCoordinator.running && !isActive && !announcedYoloStarted && roadCoordinator.successfulYoloFrames > 0) {
+            announcedYoloStarted = true
+            val message = com.travessia.segura.road.RoadText.get(config.appLanguage,"ACTIVE_ANALYSIS")
+            tvInfo.text = message
+            voz.falarPrioritario("yolo_started",message,com.travessia.segura.voice.VoicePriority.CROSSING)
+        }
         lastVehicleCount = nVeiculos
         lastSituation = situacao
-        tvEstado.text = estadoExibido(estado)
+        val stateText = estadoExibido(estado)
+        if (tvEstado.text.toString() != stateText) tvEstado.text = stateText
 
         tvEstado.setTextColor(
             when (situacao) {
@@ -894,7 +927,8 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        tvSituacao.text = situacaoExibida(situacao)
+        val situationText = situacaoExibida(situacao)
+        if (tvSituacao.text.toString() != situationText) tvSituacao.text = situationText
         tvSituacao.setTextColor(
             when (situacao) {
                 "SEGURO" -> 0xFF44DD44.toInt()
@@ -906,7 +940,8 @@ class MainActivity : AppCompatActivity() {
 
         val semInfo = if (semCor != "NENHUM") " | ${tr("traffic_light")}: ${config.nomeCorSemaforo(semCor).replaceFirstChar { it.uppercase() }}" else ""
         tvDetectionCount.text = "${tr("vehicles")}: $nVeiculos$semInfo"
-        tvAlertStatus.text = "${tr("current_situation")}: ${situacaoExibida(situacao)}"
+        val alertText = "${tr("current_situation")}: $situationText"
+        if (tvAlertStatus.text.toString() != alertText) tvAlertStatus.text = alertText
 
         // FPS para câmera local
         if (cameraMode == MODE_LOCAL_CAMERA) {
@@ -930,13 +965,18 @@ class MainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == CAMERA_PERMISSION_CODE) {
+        if (requestCode == USB_CAMERA_PERMISSION_CODE) {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && foreground && cameraMode == MODE_USB_CAMERA) configurarUsb()
+            else tvInfo.text = tr("camera_permission_needed")
+        } else if (requestCode == CAMERA_PERMISSION_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startCamera()
             } else {
                 Toast.makeText(this, tr("camera_permission_needed"), Toast.LENGTH_LONG).show()
                 tvInfo.text = tr("no_camera_permission")
             }
+        } else if (requestCode == ROAD_MICROPHONE_PERMISSION_CODE) {
+            resumeRoadMonitoring()
         } else if (requestCode == MICROPHONE_PERMISSION_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 startVoiceCommand()
@@ -945,8 +985,6 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 voz.forcar("voice_permission", msg)
             }
-        } else if (requestCode == MONITORING_PERMISSION_CODE) {
-            startAutomaticMonitoring()
         }
     }
 
@@ -959,58 +997,72 @@ class MainActivity : AppCompatActivity() {
         isActive = false
         benchmarkLogger.stopSession()
         pararX5()
+        pararUsb()
+        roadCoordinator.suspendMonitoring()
+        cameraExecutor.execute { roadCoordinator.close() }
         cameraExecutor.shutdown()
         if (::voiceCommands.isInitialized) voiceCommands.destroy()
-        stopAutomaticMonitoring()
-        foregroundNavigationManager?.suspendForBackground()
-        activityScope.cancel()
         voz.destruir()
         if (::detector.isInitialized) detector.fechar()
     }
 
     override fun onPause() {
         super.onPause()
-        stopAutomaticMonitoring()
-        foregroundNavigationManager?.suspendForBackground()
-        if (analysisStartedAutomatically && isActive) setAnalysisActive(false, automatic = true)
+        foreground = false
+        pararUsb()
+        crossingConsent.cancel()
+        window.decorView.removeCallbacks(videoWatchdog)
+        pendingVoiceStart = false
+        roadCoordinator.suspendMonitoring()
+        cameraExecutor.execute { roadCoordinator.release() }
+        pararX5()
+        if (::stateMachine.isInitialized) stateMachine.entrarEstado(EST_INATIVO)
+        isActive = false
+        benchmarkLogger.stopSession()
+        if (::voiceCommands.isInitialized) voiceCommands.cancel()
+        if (::voz.isInitialized) voz.interromper()
         // RTSP sockets must not survive in the background; the user can restart explicitly.
-        if (cameraMode == MODE_X5_CAMERA && isActive) setAnalysisActive(false)
+        overlayView.clear()
     }
 
-    /** Inicia apenas o contexto leve; câmera/YOLO continuam desligados até os critérios se confirmarem. */
-    private fun startAutomaticMonitoring() {
-        if (!::config.isInitialized || !config.walkingMonitoringEnabled || !config.automaticAnalysisEnabled) return
-        val needed = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
-        ) {
-            needed += Manifest.permission.ACCESS_FINE_LOCATION
-            needed += Manifest.permission.ACCESS_COARSE_LOCATION
+    private fun resumeRoadMonitoring() {
+        if (!foreground || !::roadCoordinator.isInitialized || !btnToggle.isEnabled) return
+        if (config.automaticRoadDetection) {
+            if (!roadMicRequested && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                roadMicRequested = true
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), ROAD_MICROPHONE_PERMISSION_CODE)
+                return
+            }
+            roadCoordinator.start()
+            btnToggle.text = tr("stop")
+            if (cameraMode == MODE_X5_CAMERA) iniciarX5()
+            if (cameraMode == MODE_USB_CAMERA) configurarUsb()
+        } else {
+            roadCoordinator.suspendMonitoring()
+            cameraExecutor.execute { roadCoordinator.release() }
+            overlayView.clear()
         }
-        if (android.os.Build.VERSION.SDK_INT >= 29 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
-        ) {
-            needed += Manifest.permission.ACTIVITY_RECOGNITION
-        }
-        if (needed.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), MONITORING_PERMISSION_CODE)
+    }
+
+    private fun configurarUsb() {
+        pararCameraLocal()
+        if (usbClient != null || !foreground) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,arrayOf(Manifest.permission.CAMERA),USB_CAMERA_PERMISSION_CODE)
             return
         }
-        crossingCoordinator?.startAutomaticMonitoring()
+        iniciarProcessamentoExterno()
+        tvInfo.text = "USB: procurando webcam UVC"
+        usbClient = com.travessia.segura.camera.UsbCameraClient(this,
+            onFrame = { frame -> if (cameraMode == MODE_USB_CAMERA && foreground) receberFrameX5(frame) else frame.bitmap.recycle() },
+            onStatus = { message, error -> runOnUiThread {
+                if (cameraMode == MODE_USB_CAMERA && foreground) {
+                    tvInfo.text = message
+                    if (error) invalidarVideoExterno(message)
+                }
+            } }).also { it.start() }
     }
 
-    private fun stopAutomaticMonitoring() {
-        crossingCoordinator?.stopAutomaticMonitoring()
-    }
+    private fun pararUsb() { usbClient?.close(); usbClient = null }
 
-    /** Mantém voz/GPS da rota ativos na tela que também pode iniciar a visão automaticamente. */
-    private fun resumeNavigationInMain() {
-        val activeRoute = NavigationSessionStore.currentRoute ?: return
-        if (!NavigationSessionStore.navigationRequested) return
-        if (foregroundNavigationRoute !== activeRoute) {
-            foregroundNavigationManager?.setRoute(activeRoute)
-            foregroundNavigationRoute = activeRoute
-        }
-        foregroundNavigationManager?.resumeForeground()
-    }
 }

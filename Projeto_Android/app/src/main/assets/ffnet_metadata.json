@@ -1,0 +1,55 @@
+{
+    "model_id": "ffnet_122ns_lowres",
+    "model_name": "FFNet-122NS-LowRes",
+    "runtime": "tflite",
+    "precision": "w8a8",
+    "tool_versions": {
+        "qairt": "2.50.0.260828221209"
+    },
+    "model_files": {
+        "ffnet_122ns_lowres.tflite": {
+            "inputs": {
+                "image": {
+                    "shape": [
+                        1,
+                        512,
+                        1024,
+                        3
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.003920366987586021,
+                        "zero_point": 0
+                    },
+                    "io_type": "image",
+                    "image_metadata": {},
+                    "value_range": [
+                        0.0,
+                        1.0
+                    ]
+                }
+            },
+            "outputs": {
+                "mask": {
+                    "shape": [
+                        1,
+                        128,
+                        256,
+                        19
+                    ],
+                    "dtype": "uint8",
+                    "description": "Semantic segmentation mask",
+                    "quantization_parameters": {
+                        "scale": 0.20315125584602356,
+                        "zero_point": 153
+                    },
+                    "labels_file": "cityscapes_labels.txt"
+                }
+            }
+        }
+    },
+    "supplementary_files": {
+        "labels.txt": "Mapping of model prediction indices -> string labels."
+    },
+    "use_case": "Semantic Segmentation"
+}

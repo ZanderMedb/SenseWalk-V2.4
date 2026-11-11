@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="com.travessia.segura">
 
     <uses-permission android:name="android.permission.CAMERA" />
@@ -9,14 +10,16 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <!-- Localização apenas em primeiro plano: o app não solicita localização em segundo plano. -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- A biblioteca UVC oferece gravação, mas SenseWalk usa somente frames em memória. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <queries>
         <intent>
@@ -53,17 +56,6 @@
             android:name=".ui.SettingsActivity"
             android:exported="false"
             android:screenOrientation="sensorLandscape" />
-
-        <activity
-            android:name=".ui.NavigationActivity"
-            android:exported="false"
-            android:screenOrientation="portrait" />
-
-        <!-- Entrega atualizações da Activity Recognition API enquanto o monitoramento
-             explicitamente iniciado pelo usuário estiver ativo. -->
-        <receiver
-            android:name=".context.ActivityRecognitionReceiver"
-            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

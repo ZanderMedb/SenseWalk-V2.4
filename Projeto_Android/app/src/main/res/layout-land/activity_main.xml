@@ -230,18 +230,6 @@
                 android:textSize="12sp" />
 
             <Button
-                android:id="@+id/btnNavigation"
-                android:fontFamily="sans-serif-medium"
-                android:layout_width="88dp"
-                android:layout_height="48dp"
-                android:layout_marginEnd="7dp"
-                android:background="@drawable/bg_button_secondary"
-                android:text="Navegar"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFFFF"
-                android:textSize="12sp" />
-
-            <Button
                 android:id="@+id/btnConfig"
                 android:fontFamily="sans-serif-medium"
                 android:layout_width="90dp"

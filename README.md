@@ -53,15 +53,18 @@ Os datasets de imagens e anotações não estão incluídos. As pastas de result
 
 ## Recursos do aplicativo
 
-- Detecção com TensorFlow Lite e visualização das caixas dos objetos.
+- Detecção com LiteRT (API TensorFlow Lite) e visualização das caixas dos objetos.
 - Captura pela câmera do aparelho, usando CameraX, e entrada experimental X5 por Wi-Fi/RTSP JPEG.
 - Rastreamento de veículos e análise de movimento, com fluxo óptico para compensação do movimento da câmera.
 - Identificação de faixas e semáforos, com lógica de estados para interpretar a cena.
 - Alertas por voz, comandos de voz e interface em português, inglês e espanhol.
+- Monitoramento visual experimental de pista/calçada com FFNet local, ativação temporal do YOLO e sobreposição de depuração, sem localização ou serviços de mapas. Consulte [a documentação e as limitações](DOCUMENTACAO_DETECCAO_AUTOMATICA.md).
 - Configurações de detecção, região de interesse, rastreamento e apresentação da interface.
 - Registro e compartilhamento de benchmarks: métricas por frame em `frames.csv` e resumo da sessão em `summary.txt`.
 
 O logger de benchmark registra métricas numéricas, sem salvar os frames da câmera.
+
+Fonte experimental **USB / UVC** implementada separadamente do CameraX. HiCamera testada no aparelho com recepção RGB 640×360 e entrada na análise YOLO; estabilidade e demais cenários ainda precisam de validação. Veja [DOCUMENTACAO_CAMERA_USB.md](DOCUMENTACAO_CAMERA_USB.md).
 
 ## Como baixar o projeto
 
@@ -91,9 +94,9 @@ Se um arquivo `.pt` aparecer como um pequeno texto começando com `version https
 | Android Gradle Plugin | 8.13.2 |
 | Gradle Wrapper | 8.13 |
 | Plugin Kotlin | 1.9.24 |
-| TensorFlow Lite | 2.14.0 |
-| CameraX | 1.3.4 |
-| Versão do aplicativo | `2.4-vision-benchmark` |
+| LiteRT (API TensorFlow Lite) | 1.4.2 |
+| CameraX | 1.4.2 |
+| Versão do aplicativo | `2.4.8-quiet-transitions` |
 
 1. No Android Studio, selecione **Open** e abra a pasta `Projeto_Android`.
 2. Configure o Android SDK, incluindo a API 35, e um Gradle JDK compatível com as versões acima.
@@ -112,7 +115,9 @@ cd Projeto_Android
 
 O APK será gerado em `Projeto_Android/app/build/outputs/apk/debug/`.
 
-**Estado da verificação:** após a reorganização, a tentativa local de executar `gradlew --offline help` falhou no ambiente com Java `25.0.3`. A compilação após essa mudança de estrutura ainda precisa ser validada com um Gradle JDK compatível.
+Use JDK 17 para compilar. Execute `./gradlew testDebugUnitTest assembleDebug` para validar os testes e gerar o APK. As bibliotecas nativas mantêm compatibilidade com páginas de 16 KB; consulte `Projeto_Android/COMPATIBILIDADE_16KB.md`.
+
+Na versão 2.4.8, os avisos automáticos são falados uma vez por condição observada, sem repetições periódicas enquanto ela permanecer igual. Mudanças confirmadas rearmam os avisos; perguntas de consentimento e comandos manuais continuam disponíveis. Detalhes e limites de validação em `DOCUMENTACAO_DETECCAO_AUTOMATICA.md`.
 
 ### Câmera X5 Z-IOT (experimental)
 
