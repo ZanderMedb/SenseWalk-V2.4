@@ -49,7 +49,7 @@ class AutomaticDetectionManager(
             if (absentSince != null && now - absentSince!! >= holdMs && now - lastEvidence >= holdMs) {
                 state = AnalysisState.MONITORING; lastExit = now; candidateSince = null
             }
-        } else if (result.roadDetected && now - lastExit >= cooldownMs) {
+        } else if (result.possibleRoadBoundary && now - lastExit >= cooldownMs) {
             if (candidateSince == null) candidateSince = now
             state = if (now - candidateSince!! >= confirmationMs) {
                 askedAt = now

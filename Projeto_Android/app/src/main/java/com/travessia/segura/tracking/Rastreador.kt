@@ -9,11 +9,16 @@ import kotlin.math.sqrt
  *
  * V2.4:
  * - EMA do centro;
- * - histórico de largura da bbox para aproximação frontal;
+ * - histórico de largura da bbox como indício de incerteza, nunca prova de movimento próprio;
  * - compensação de translação global da câmera recebida do optical flow;
  * - ghosts não alimentam o histórico cinemático.
  */
-class Rastreador(private val config: AppConfig) {
+class Rastreador(private val settings: () -> Settings) {
+    data class Settings(val emaAlpha: Float = .45f, val historicoMax: Int = 20,
+        val velParadoPxs: Float = 18f, val velAproximandoPxs: Float = 30f,
+        val crescimentoBBoxAproximando: Float = .14f, val limiarProximoPct: Float = .30f)
+    constructor(config: AppConfig) : this({ Settings(config.emaAlpha,config.historicoMax,
+        config.velParadoPxs,config.velAproximandoPxs,config.crescimentoBBoxAproximando,config.limiarProximoPct) })
 
     private val historicos = mutableMapOf<Int, ArrayDeque<Triple<Double, Double, Double>>>()
     private val historicoLarguras = mutableMapOf<Int, ArrayDeque<Pair<Double, Double>>>()
@@ -24,19 +29,33 @@ class Rastreador(private val config: AppConfig) {
 
     private var cameraOffsetX = 0.0
     private var cameraOffsetY = 0.0
+    private var cameraReliable = false
+    private var cameraMotionLarge = false
 
     /**
      * Deve ser chamado uma vez por frame, antes de atualizar os veículos.
      * dx/dy representam o deslocamento dominante do fundo do frame anterior ao atual.
      */
     fun novoFrameCamera(dx: Float, dy: Float, confidence: Float, minConfidence: Float) {
-        if (confidence >= minConfidence) {
+        val wasReliable = cameraReliable
+        cameraReliable = confidence >= minConfidence && dx.isFinite() && dy.isFinite()
+        cameraMotionLarge = kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > 12.0
+        if (!cameraReliable || cameraMotionLarge || !wasReliable) {
+            historicos.clear(); historicoLarguras.clear(); ema.clear()
+        }
+        if (cameraReliable) {
             cameraOffsetX += dx.toDouble()
             cameraOffsetY += dy.toDouble()
         }
     }
 
     fun atualizar(tid: Int, cx: Float, cy: Float, t: Double, bboxW: Int = 0) {
+        val config = settings()
+        // Nunca misturar amostras anteriores a uma lacuna no vídeo ou timestamps retrocedidos.
+        val previous = ultimoVisto[tid]
+        if (previous != null && (t <= previous || t - previous > 1.5)) {
+            historicos.remove(tid); historicoLarguras.remove(tid); ema.remove(tid)
+        }
         ultimoCentroObservado[tid] = cx.toDouble() to cy.toDouble()
 
         // Converte a posição observada para um referencial aproximadamente estável,
@@ -59,13 +78,13 @@ class Rastreador(private val config: AppConfig) {
 
         val hist = historicos.getOrPut(tid) { ArrayDeque() }
         hist.add(Triple(sx, sy, t))
-        while (hist.size > config.historicoMax) hist.removeFirst()
+        while (hist.size > config.historicoMax.coerceIn(5,60)) hist.removeFirst()
 
         if (bboxW > 0) {
             bboxLargura[tid] = bboxW
             val wh = historicoLarguras.getOrPut(tid) { ArrayDeque() }
             wh.add(bboxW.toDouble() to t)
-            while (wh.size > config.historicoMax) wh.removeFirst()
+            while (wh.size > config.historicoMax.coerceIn(5,60)) wh.removeFirst()
         }
 
         ultimoVisto[tid] = t
@@ -85,6 +104,7 @@ class Rastreador(private val config: AppConfig) {
 
     @Suppress("UNUSED_PARAMETER")
     fun cinematica(tid: Int, wFrame: Int = 640, hFrame: Int = 480): CinematicaResult {
+        val config = settings()
         val h = historicos[tid]
         if (h == null || h.size < 3) {
             return CinematicaResult(0f, 0f, 0f, false, false)
@@ -92,9 +112,11 @@ class Rastreador(private val config: AppConfig) {
 
         val pts = h.toList()
         val n = minOf(8, pts.size)
-        val p = pts.takeLast(n)
+        val recentTime = pts.last().third
+        val p = pts.takeLast(n).filter { recentTime - it.third <= 2.0 }
+        if (p.size < 3) return CinematicaResult(0f,0f,0f,false,false)
         val dt = p.last().third - p.first().third
-        if (dt < 0.05) return CinematicaResult(0f, 0f, 0f, false, false)
+        if (dt < 0.15 || dt > 2.0 || !cameraReliable || cameraMotionLarge) return CinematicaResult(0f, 0f, 0f, false, false)
 
         val vxs = mutableListOf<Double>()
         val vys = mutableListOf<Double>()
@@ -116,21 +138,17 @@ class Rastreador(private val config: AppConfig) {
         val vx = (vxs.sum() / sp).toFloat()
         val vy = (vys.sum() / sp).toFloat()
         val vel = sqrt((vx * vx + vy * vy).toDouble()).toFloat()
-        val emMov = vel > config.velParadoPxs
+        val pixelScale = wFrame.coerceAtLeast(1) / 640f
+        val emMov = vel > config.velParadoPxs * pixelScale
 
         val observed = ultimoCentroObservado[tid]
         val noEsq = (observed?.first ?: (wFrame / 2.0)) < wFrame / 2.0
-        val aproxY = vy > config.velAproximandoPxs
-        val aproxX = (noEsq && vx > config.velAproximandoPxs) ||
-                (!noEsq && vx < -config.velAproximandoPxs)
-
-        val crescimento = taxaCrescimentoBBox(tid)
-        val larguraAtual = bboxLargura[tid]?.toFloat() ?: 0f
-        val tamanhoMinimoOk = wFrame > 0 && larguraAtual / wFrame >= 0.035f
-        val aproxEscala = tamanhoMinimoOk && crescimento >= config.crescimentoBBoxAproximando
-
-        val aproximando = aproxY || aproxX || aproxEscala
-        return CinematicaResult(vel, vx, vy, emMov, aproximando)
+        // Deslocamento vertical e expansão também ocorrem ao caminhar rumo a um carro parado.
+        // Não são evidências independentes de movimento próprio do veículo.
+        val aproximando = emMov && VehicleMotionRules.independentlyApproaching(
+            vx, taxaCrescimentoBBox(tid), noEsq, p.size, cameraReliable, cameraMotionLarge,
+            config.velAproximandoPxs * pixelScale)
+        return CinematicaResult(vel, vx, vy, emMov, aproximando, valid = true)
     }
 
     fun taxaCrescimentoBBox(tid: Int): Float {
@@ -147,15 +165,21 @@ class Rastreador(private val config: AppConfig) {
     }
 
     fun classificar(tid: Int, w: Int = 640, h: Int = 480): Pair<String, Float> {
+        val config = settings()
         val c = cinematica(tid, w, h)
+        val samples = historicos[tid]
         return when {
+            !c.valid || !cameraReliable || cameraMotionLarge || samples == null || samples.size < 5 ||
+                samples.last().third - samples.first().third < .15 -> "MOVIMENTO_INCERTO" to c.vel
             c.aproximando -> "APROXIMANDO" to c.vel
-            c.emMovimento -> "EM_MOVIMENTO" to c.vel
+            kotlin.math.abs(c.vx) > config.velParadoPxs * w.coerceAtLeast(1) / 640f -> "EM_MOVIMENTO" to c.vel
+            c.emMovimento || taxaCrescimentoBBox(tid) >= config.crescimentoBBoxAproximando -> "MOVIMENTO_INCERTO" to c.vel
             else -> "PARADO" to c.vel
         }
     }
 
     fun ehProximo(tid: Int, wFrame: Int): Boolean {
+        val config = settings()
         val bw = bboxLargura[tid] ?: return false
         return (bw.toFloat() / wFrame) >= config.limiarProximoPct
     }
@@ -174,5 +198,7 @@ class Rastreador(private val config: AppConfig) {
         ema.clear()
         cameraOffsetX = 0.0
         cameraOffsetY = 0.0
+        cameraReliable = false
+        cameraMotionLarge = false
     }
 }

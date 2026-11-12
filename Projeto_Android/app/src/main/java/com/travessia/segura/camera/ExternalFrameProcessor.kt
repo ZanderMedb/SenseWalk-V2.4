@@ -12,6 +12,11 @@ import com.travessia.segura.logic.StateMachine
 import com.travessia.segura.tracking.Rastreador
 import com.travessia.segura.ui.OverlayView
 import com.travessia.segura.vision.SparseOpticalFlowEstimator
+import com.travessia.segura.road.SceneEvidenceTracker
+import com.travessia.segura.road.SignalApplicability
+import com.travessia.segura.road.CrosswalkStatus
+import com.travessia.segura.road.CrossingRiskAnalyzer
+import com.travessia.segura.road.CrossingVerification
 
 /** Processes external camera frames through the same vision pipeline as CameraX. */
 class ExternalFrameProcessor(
@@ -21,9 +26,10 @@ class ExternalFrameProcessor(
     private val tracker: Rastreador,
     private val stateMachine: StateMachine,
     private val benchmarkLogger: BenchmarkLogger,
-    private val onStatusUpdate: (String, String, Int, String) -> Unit,
-    private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int) -> Unit,
-    private val coordinator: com.travessia.segura.road.InferenceCoordinator? = null
+    private val onStatusUpdate: (String, String, Int, String, Long, Long?) -> Unit,
+    private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int, Long, Long?) -> Unit,
+    private val coordinator: com.travessia.segura.road.InferenceCoordinator? = null,
+    private val crossing: CrossingVerification? = null
 ) {
     companion object {
         private const val TAG = "ExternalFrameProcessor"
@@ -31,6 +37,9 @@ class ExternalFrameProcessor(
 
     private var frameCount = 0L
     private val opticalFlow = SparseOpticalFlowEstimator()
+    private val sceneEvidence = SceneEvidenceTracker()
+    private var previousVehicles = emptyList<FloatArray>()
+    private var pipelineToken: Long? = null
 
     fun processarFrame(bitmap: Bitmap, overlayRotation: Int = 0, capturedAtMs: Long = SystemClock.elapsedRealtime()) {
         if ((stateMachine.estado == AppConfig.EST_INATIVO && coordinator?.running != true) || !detector.isReady) return
@@ -38,21 +47,25 @@ class ExternalFrameProcessor(
             if (coordinator != null) coordinator.process(bitmap, 0, capturedAtMs) { processarInterno(bitmap, overlayRotation, capturedAtMs) }
             else processarInterno(bitmap, overlayRotation, capturedAtMs)
         } catch (e: Exception) {
+            crossing?.invalidate()
             coordinator?.reportVideoError()
             Log.e(TAG, "Erro ao processar frame externo: ${e.message}", e)
         }
     }
 
     private fun processarInterno(bitmap: Bitmap, overlayRotation: Int, capturedAtMs: Long) {
+        val token = coordinator?.resultToken
+        if (token != pipelineToken) { resetar(); pipelineToken = token }
+        if (SystemClock.elapsedRealtime() - capturedAtMs !in 0..1500) { crossing?.invalidate(); coordinator?.reportStaleResult(); return }
         val frameStarted = SystemClock.elapsedRealtimeNanos()
         frameCount++
         val timestampMs = System.currentTimeMillis()
-        val agora = timestampMs / 1000.0
+        val agora = capturedAtMs / 1000.0
         val wf = bitmap.width
         val hf = bitmap.height
 
         val motion = if (config.opticalFlowEnabled) {
-            opticalFlow.estimate(bitmap, 0)
+            opticalFlow.estimate(bitmap, 0, previousVehicles)
         } else {
             SparseOpticalFlowEstimator.MotionEstimate()
         }
@@ -61,13 +74,16 @@ class ExternalFrameProcessor(
         val appliedDy = if (useMotion) motion.dy else 0f
 
         val rawDetections = detector.detectar(bitmap, config.confMinima, 0)
-        if (SystemClock.elapsedRealtime() - capturedAtMs > 1500) { coordinator?.reportStaleResult(); return }
+        if (SystemClock.elapsedRealtime() - capturedAtMs !in 0..1500) { crossing?.invalidate(); coordinator?.reportStaleResult(); return }
+        if (token != null && coordinator?.acceptsResult(token,capturedAtMs) != true) return
         val rawVeiculos = rawDetections.filter { config.categorizarClasse(it.className) == "veiculo" }
+        previousVehicles = rawVeiculos.map { floatArrayOf(it.x1, it.y1, it.x2, it.y2) }
         val contexto = rawDetections.filter { config.categorizarClasse(it.className) != "veiculo" }
+        val scene = sceneEvidence.update(contexto, capturedAtMs, wf)
         coordinator?.observeYolo(rawVeiculos.isNotEmpty() || contexto.isNotEmpty())
 
         vehicleTracker.configure(config.trackerCenterDistancePct, config.trackerGhostFrames)
-        val trackedVehicles = vehicleTracker.update(rawVeiculos, wf, hf, appliedDx, appliedDy)
+        val trackedVehicles = vehicleTracker.update(rawVeiculos, wf, hf, appliedDx, appliedDy, capturedAtMs)
         tracker.novoFrameCamera(motion.dx, motion.dy, motion.confidence, config.opticalFlowMinConfidence)
 
         if (frameCount % 30L == 0L) {
@@ -80,11 +96,15 @@ class ExternalFrameProcessor(
         }
 
         val veiculos = mutableMapOf<Int, VeiculoInfo>()
-        var faixaDet = false
-        var faixaCentroX = -1f
-        var semCorFrame = "NENHUM"
-        var nSemId = 0
-        val overlayBoxes = mutableListOf<OverlayView.BoxInfo>()
+        val faixaDet = scene.crosswalk == CrosswalkStatus.CONFIRMED
+        val faixaCentroX = scene.crosswalkBox?.cx ?: -1f
+        val semCorFrame = when (scene.signal) {
+            SignalApplicability.PEDESTRIAN_GREEN -> "VERDE"
+            SignalApplicability.PEDESTRIAN_RED -> "VERMELHO"
+            else -> "NENHUM"
+        }
+        var nSemId = trackedVehicles.count { it.isGhost }
+        val overlayBoxes = if (config.mostrarOverlay || config.roadDebugOverlay) mutableListOf<OverlayView.BoxInfo>() else null
 
         for (det in contexto) {
             val cx = det.cx
@@ -93,9 +113,7 @@ class ExternalFrameProcessor(
 
             when (config.categorizarClasse(det.className)) {
                 "faixa" -> {
-                    faixaDet = true
-                    faixaCentroX = cx
-                    overlayBoxes.add(
+                    overlayBoxes?.add(
                         OverlayView.BoxInfo(
                             x1 = det.x1, y1 = det.y1, x2 = det.x2, y2 = det.y2,
                             label = config.tr("object_crosswalk"),
@@ -107,14 +125,13 @@ class ExternalFrameProcessor(
 
                 "semaforo" -> {
                     val cor = config.inferirCorSemaforo(det.className)
-                    if (cor != "DESCONHECIDO") semCorFrame = cor
                     val semColor = when (cor) {
                         "VERMELHO" -> OverlayView.COLOR_SEM_VERMELHO
                         "VERDE" -> OverlayView.COLOR_SEM_VERDE
                         "AMARELO" -> OverlayView.COLOR_SEM_AMARELO
                         else -> OverlayView.COLOR_SEM_OUTRO
                     }
-                    overlayBoxes.add(
+                    overlayBoxes?.add(
                         OverlayView.BoxInfo(
                             x1 = det.x1, y1 = det.y1, x2 = det.x2, y2 = det.y2,
                             label = config.nomeCorSemaforo(cor).replaceFirstChar { it.uppercase() },
@@ -128,15 +145,15 @@ class ExternalFrameProcessor(
 
         for (det in trackedVehicles) {
             if (det.isGhost) continue
-            if (!config.dentroRoi(det.cx, det.cy, wf, hf)) continue
+            // ROI é só apresentação; não esconder tráfego lateral da análise de perigo.
             tracker.atualizar(det.trackId, det.cx, det.cy, agora, det.bboxW.toInt())
         }
         tracker.limpar(agora)
 
         for (det in trackedVehicles) {
+            if (det.isGhost) continue
             val cx = det.cx
             val cy = det.cy
-            if (!config.dentroRoi(cx, cy, wf, hf)) continue
 
             val tid = det.trackId
             if (tid < 0) {
@@ -160,9 +177,10 @@ class ExternalFrameProcessor(
             val boxColor = when (classif) {
                 "APROXIMANDO" -> OverlayView.COLOR_APROXIMANDO
                 "EM_MOVIMENTO" -> OverlayView.COLOR_EM_MOVIMENTO
+                "MOVIMENTO_INCERTO" -> OverlayView.COLOR_OUTROS
                 else -> OverlayView.COLOR_PARADO
             }
-            overlayBoxes.add(
+            overlayBoxes?.add(
                 OverlayView.BoxInfo(
                     x1 = det.x1, y1 = det.y1, x2 = det.x2, y2 = det.y2,
                     label = "${config.nomeVeiculo(det.className)} ${config.sufixoMovimento(classif)}",
@@ -173,7 +191,14 @@ class ExternalFrameProcessor(
             )
         }
 
-        onOverlayUpdate(overlayBoxes, wf, hf, overlayRotation)
+        if (token != null && coordinator?.acceptsResult(token,capturedAtMs) != true) return
+        if (overlayBoxes != null) onOverlayUpdate(overlayBoxes, wf, hf, overlayRotation, capturedAtMs, token)
+
+        val risk = CrossingRiskAnalyzer.analyze(veiculos.values, wf, hf, scene.crosswalkBox,
+            SystemClock.elapsedRealtime() - capturedAtMs,
+            coverageVerified = false, cameraReliable = useMotion,
+            unobservedVehicles = vehicleTracker.lastStats.unobservedTracks)
+        crossing?.observe(risk, scene, coordinator?.lastRoadResult, capturedAtMs)
 
         stateMachine.processar(
             veiculosReais = veiculos,
@@ -182,15 +207,19 @@ class ExternalFrameProcessor(
             faixaDet = faixaDet,
             faixaCx = faixaCentroX,
             wf = wf,
-            hf = hf
+            hf = hf,
+            risk = risk,
+            monitorHazards = coordinator?.running == true,
+            guidedVerification = crossing?.stage?.let { it != CrossingVerification.Stage.IDLE } == true
         )
 
-        coordinator?.completedYoloFrame()
+        coordinator?.completedYoloFrame(capturedAtMs)
         onStatusUpdate(
             stateMachine.estado,
             stateMachine.situacaoAtual,
             veiculos.size,
-            stateMachine.semCorAtual
+            stateMachine.semCorAtual,
+            capturedAtMs, token
         )
 
         if (config.benchmarkEnabled) {
@@ -211,7 +240,8 @@ class ExternalFrameProcessor(
                     motionConfidence = motion.confidence,
                     trackerStats = vehicleTracker.lastStats,
                     state = stateMachine.estado,
-                    situation = stateMachine.situacaoAtual
+                    situation = stateMachine.situacaoAtual,
+                    frameAgeMs = SystemClock.elapsedRealtime() - capturedAtMs
                 )
             )
         }
@@ -221,6 +251,8 @@ class ExternalFrameProcessor(
         vehicleTracker.reset()
         tracker.resetar()
         opticalFlow.reset()
+        sceneEvidence.reset()
+        previousVehicles = emptyList()
         frameCount = 0L
     }
 }

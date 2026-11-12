@@ -32,7 +32,7 @@ class AppConfig(context: Context) {
         set(v) = prefs.edit().putBoolean("voice_auto_listen", v).apply()
 
     var automaticRoadDetection: Boolean
-        get() = prefs.getBoolean("automatic_road_detection", false)
+        get() = prefs.getBoolean("automatic_road_detection", true)
         set(v) = prefs.edit().putBoolean("automatic_road_detection", v).apply()
     var cameraSource: Int
         get() = prefs.getInt("camera_source",0).coerceIn(0,2)
@@ -46,6 +46,10 @@ class AppConfig(context: Context) {
     var roadYoloFps: Int
         get() = prefs.getInt("road_yolo_fps", 15).coerceIn(1,30)
         set(v) = prefs.edit().putInt("road_yolo_fps", v.coerceIn(1,30)).apply()
+    /** Preferência de captura CameraX; os tensores continuam nas dimensões do modelo. */
+    var captureWidth: Int
+        get() = prefs.getInt("capture_width", 1280).takeIf { it in setOf(640,960,1280) } ?: 1280
+        set(v) = prefs.edit().putInt("capture_width", v.takeIf { it in setOf(640,960,1280) } ?: 1280).apply()
     var roadConfirmationMs: Int
         get() = prefs.getInt("road_confirmation_ms", 1500).coerceIn(500,5000)
         set(v) = prefs.edit().putInt("road_confirmation_ms", v.coerceIn(500,5000)).apply()
@@ -194,7 +198,7 @@ class AppConfig(context: Context) {
         get()  = prefs.getFloat("tracker_center_distance_pct", 0.14f)
         set(v) = prefs.edit().putFloat("tracker_center_distance_pct", v.coerceIn(0.05f, 0.35f)).apply()
 
-    // Crescimento relativo da bbox por segundo usado como sinal de aproximação frontal.
+    // Crescimento relativo da bbox indica incerteza (não prova movimento do veículo).
     var crescimentoBBoxAproximando: Float
         get()  = prefs.getFloat("crescimento_bbox_aproximando", 0.14f)
         set(v) = prefs.edit().putFloat("crescimento_bbox_aproximando", v.coerceIn(0.04f, 0.60f)).apply()

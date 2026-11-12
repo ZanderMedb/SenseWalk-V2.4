@@ -7,6 +7,15 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class VoiceMessageSchedulerTest {
+    @Test fun `safety removes stale directions but keeps new danger`() {
+        val scheduler = VoiceMessageScheduler()
+        scheduler.offer(ScheduledVoiceMessage("turn", "Vire", VoicePriority.CROSSING, 1))
+        scheduler.offer(ScheduledVoiceMessage("info", "Rua", VoicePriority.INFO, 2))
+        scheduler.offer(ScheduledVoiceMessage("danger", "Aguarde", VoicePriority.SAFETY, 3))
+        scheduler.dropBelow(VoicePriority.SAFETY)
+        assertEquals("danger", scheduler.poll()?.key)
+        assertNull(scheduler.poll())
+    }
     @Test fun `safety alerts are emitted before informational messages`() {
         val scheduler = VoiceMessageScheduler()
         scheduler.offer(ScheduledVoiceMessage("status", "Análise em andamento", VoicePriority.INFO, 2))

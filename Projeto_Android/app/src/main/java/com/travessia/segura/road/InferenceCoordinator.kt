@@ -10,14 +10,16 @@ import com.travessia.segura.config.AppConfig
 data class RoadDebugFrame(val labels: ByteArray?, val result: RoadSegmentationResult?, val state: AnalysisState,
     val inferenceMs: Long, val totalMs: Long, val dropped: Long, val reason: String,
     val frameWidth: Int = 1, val frameHeight: Int = 1,
-    val segmentationFps: Float = 0f, val yoloFps: Float = 0f, val callbackFps: Float = 0f)
+    val segmentationFps: Float = 0f, val yoloFps: Float = 0f, val callbackFps: Float = 0f,
+    val sessionToken: Long = -1L)
 
 /** Não cria captura nem fila. CameraX KEEP_ONLY_LATEST / canal X5 de capacidade 1 fornecem frames. */
 class InferenceCoordinator(
     private val context: Context, private val config: AppConfig,
     private val manual: () -> Boolean,
     private val onYoloState: (Boolean) -> Unit,
-    private val onDebug: (RoadDebugFrame) -> Unit
+    private val onDebug: (RoadDebugFrame) -> Unit,
+    private val onInvalidated: () -> Unit = {}
 ) : AutoCloseable {
     @Volatile var running = false
     @Volatile var lastFrameArrivalMs = 0L; private set
@@ -35,23 +37,49 @@ class InferenceCoordinator(
     private var segments = 0
     private var yolos = 0
     @Volatile var successfulYoloFrames = 0L; private set
+    @Volatile var lastRoadResult: RoadSegmentationResult? = null; private set
     @Volatile private var lastSuccessfulYoloAt = 0L
+    private val validity = com.travessia.segura.camera.FrameValidity()
+    val resultToken: Long get() = validity.generation
+    fun invalidateSession() {
+        validity.invalidate(SystemClock.elapsedRealtime())
+        lastRoadResult = null
+        lastSuccessfulYoloAt = 0
+        successfulYoloFrames = 0
+        onInvalidated()
+    }
+    fun acceptsResult(token: Long, capturedAtMs: Long): Boolean =
+        HazardMonitoringPolicy.enabled(manual(),running) && validity.accepts(token,capturedAtMs,SystemClock.elapsedRealtime())
     val hasRecentYoloResult: Boolean get() = successfulYoloFrames > 0 && SystemClock.elapsedRealtime()-lastSuccessfulYoloAt in 0..1500
-    fun start() { running = true; lastFrameArrivalMs = SystemClock.elapsedRealtime() }
-    fun suspendMonitoring() { running = false }
+    fun start() {
+        if (!running) invalidateSession()
+        running = true; lastFrameArrivalMs = SystemClock.elapsedRealtime()
+    }
+    fun suspendMonitoring() { running = false; invalidateSession() }
 
     @Synchronized fun process(bitmap: Bitmap, rotation: Int, capturedAtMs: Long, yolo: () -> Unit) {
         val started = SystemClock.elapsedRealtime()
+        val token = resultToken
         lastFrameArrivalMs = started
         val cpuStarted = android.os.Debug.threadCpuTimeNanos()
         if (epoch == 0L) epoch = started
         captures++
         val beforeTick = machine.state
         machine.tick(started)
-        if (machine.state != beforeTick) onDebug(RoadDebugFrame(null,null,machine.state,0,0,dropped,"confirmation_timeout"))
+        if (machine.state != beforeTick) publish(RoadDebugFrame(null,null,machine.state,0,0,dropped,"confirmation_timeout"),token)
         var segMs = 0L
         var yoloMs = 0L
         if (started - capturedAtMs !in 0..1500) { dropped++; reportStaleResult(); return }
+        if (!acceptsResult(token,capturedAtMs)) { dropped++; return }
+        // Perigo antes do FFNet; também antes/durante consentimento, sem iniciar a travessia.
+        if (HazardMonitoringPolicy.enabled(manual(),running) && started - lastYolo >= 1000 / config.roadYoloFps) {
+            lastYolo = started
+            if (automaticYolo && !manual()) onYoloState(true)
+            val yoloStarted = SystemClock.elapsedRealtime()
+            yolo()
+            yolos++; yoloMs = SystemClock.elapsedRealtime() - yoloStarted
+        } else dropped++
+        if (!acceptsResult(token,capturedAtMs)) return
         if (running && config.automaticRoadDetection && !failure && machine.state != AnalysisState.AWAITING_CONFIRMATION) {
             if (machine.state == AnalysisState.STOPPED) {
                 machine = AutomaticDetectionManager(config.roadConfirmationMs.toLong(), config.roadHoldMs.toLong(), config.roadCooldownMs.toLong())
@@ -64,21 +92,25 @@ class InferenceCoordinator(
                 lastSegmentation = started
                 var upright: Bitmap? = null
                 try {
+                    val segmentationStarted = SystemClock.elapsedRealtime()
                     val engine = segmentor ?: RoadSegmentationManager(context).also { segmentor = it }
                     upright = if (rotation == 0) bitmap else Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height,
                         Matrix().apply { postRotate(rotation.toFloat()) }, true)
                     val labels = engine.segment(upright)
                     segments++; segMs = engine.lastInferenceMs
                     val finished = SystemClock.elapsedRealtime()
-                    lastSegmentationCostMs = finished - started
-                    if (!running) return
+                    lastSegmentationCostMs = finished - segmentationStarted
+                    if (!running || token != resultToken) return
                     if (finished - capturedAtMs > 1500) {
                         dropped++
-                        onDebug(RoadDebugFrame(null,null,AnalysisState.INCONCLUSIVE,engine.lastInferenceMs,
-                            finished-capturedAtMs,dropped,"ffnet_stale"))
+                        lastRoadResult = null
+                        onInvalidated()
+                        publish(RoadDebugFrame(null,null,AnalysisState.INCONCLUSIVE,engine.lastInferenceMs,
+                            finished-capturedAtMs,dropped,"ffnet_stale"),token)
                         return
                     }
                     val result = RoadSceneAnalyzer.analyze(labels, 256, 128, capturedAtMs)
+                    lastRoadResult = result
                     val state = machine.update(result, finished)
                     val seconds = ((finished - epoch) / 1000f).coerceAtLeast(1f)
                     val wanted = state == AnalysisState.ACTIVE_ANALYSIS
@@ -86,28 +118,21 @@ class InferenceCoordinator(
                         automaticYolo = wanted
                         if (!manual()) onYoloState(wanted)
                     }
-                    onDebug(RoadDebugFrame(if (config.roadDebugOverlay) labels else null, result, state,
+                    publish(RoadDebugFrame(if (config.roadDebugOverlay) labels else null, result, state,
                         engine.lastInferenceMs, finished - capturedAtMs, dropped,
                         if (result.possibleRoadBoundary) "boundary" else if (result.roadDetected) "road" else "inconclusive",
-                        upright.width, upright.height, segments / seconds, yolos / seconds, captures / seconds))
+                        upright.width, upright.height, segments / seconds, yolos / seconds, captures / seconds),token)
                 } catch (error: Exception) {
+                    if (token != resultToken) return
                     failure = true; machine.error()
+                    lastRoadResult = null
+                    onInvalidated()
                     Log.e("RoadInference", "FFNet indisponível", error)
                     // Preservar YOLO já ativo; a falha nunca é silenciosa.
-                    onDebug(RoadDebugFrame(null, null, AnalysisState.ERROR, 0, 0, dropped, "model_error"))
+                    publish(RoadDebugFrame(null, null, AnalysisState.ERROR, 0, 0, dropped, "model_error"),token)
                 } finally { if (upright != null && upright !== bitmap) upright.recycle() }
             }
         }
-        // Se a segmentação falhou ou foi desativada, não desligar análise manual.
-        val enabled = manual() || (running && automaticYolo)
-        val now = SystemClock.elapsedRealtime()
-        if (enabled && now - capturedAtMs <= 1500 && now - lastYolo >= 1000 / config.roadYoloFps) {
-            lastYolo = now
-            if (!manual()) onYoloState(true)
-            val yoloStarted = SystemClock.elapsedRealtime()
-            yolo()
-            yolos++; yoloMs = SystemClock.elapsedRealtime() - yoloStarted
-        } else dropped++
         if (config.benchmarkEnabled) {
             val end = SystemClock.elapsedRealtime()
             val seconds = ((end-epoch)/1000f).coerceAtLeast(1f)
@@ -124,26 +149,33 @@ class InferenceCoordinator(
         if (started) {
             successfulYoloFrames = 0
             lastSegmentation = 0L // validar um frame novo, sem rejeitar o sim por uma leitura antiga
-            onDebug(RoadDebugFrame(null,null,AnalysisState.STARTING_ANALYSIS,0,0,dropped,"consent_received"))
+            publish(RoadDebugFrame(null,null,AnalysisState.STARTING_ANALYSIS,0,0,dropped,"consent_received"))
         }
         Log.i("RoadInference", "Consent accepted=$accepted scheduled=$started state=${machine.state}")
         return started
     }
-    @Synchronized fun completedYoloFrame() {
+    @Synchronized fun completedYoloFrame(capturedAtMs: Long) {
         successfulYoloFrames++
-        lastSuccessfulYoloAt = SystemClock.elapsedRealtime()
+        lastSuccessfulYoloAt = capturedAtMs
         if (successfulYoloFrames == 1L) Log.i("RoadInference","First fresh YOLO result after consent/manual activation")
     }
     fun reportVideoError() {
-        onDebug(RoadDebugFrame(null,null,AnalysisState.ERROR,0,0,dropped,"video_error"))
+        invalidateSession()
+        publish(RoadDebugFrame(null,null,AnalysisState.ERROR,0,0,dropped,"video_error"))
     }
     fun reportStaleResult() {
-        onDebug(RoadDebugFrame(null,null,AnalysisState.INCONCLUSIVE,0,0,dropped,"stale_frame"))
+        onInvalidated()
+        lastRoadResult = null
+        publish(RoadDebugFrame(null,null,AnalysisState.INCONCLUSIVE,0,0,dropped,"stale_frame"))
     }
+    private fun publish(frame: RoadDebugFrame, token: Long = resultToken) = onDebug(frame.copy(sessionToken=token))
     @Synchronized fun release() {
+        validity.invalidate(SystemClock.elapsedRealtime())
         segmentor?.close(); segmentor = null
         machine.stop(); automaticYolo = false; failure = false; lastSegmentation = 0
         successfulYoloFrames = 0
+        lastSuccessfulYoloAt = 0; lastYolo = 0; lastSegmentationCostMs = 0
+        lastRoadResult = null
         telemetry.close(); epoch = 0; captures = 0; segments = 0; yolos = 0; dropped = 0
     }
     override fun close() { running = false; release() }

@@ -11,6 +11,9 @@ import com.travessia.segura.detection.VeiculoInfo
 import com.travessia.segura.tracking.Rastreador
 import com.travessia.segura.voice.VoiceSystem
 import com.travessia.segura.voice.VoicePriority
+import com.travessia.segura.road.CrossingRiskAssessment
+import com.travessia.segura.road.RiskReason
+import com.travessia.segura.road.RoadText
 
 /**
  * Interpreta observações visuais; nenhuma combinação autoriza uma travessia.
@@ -48,6 +51,7 @@ class StateMachine(
     private var tViaLimpa: Double? = null
     private var tipoConfirmacao: String? = null
     private var aproximacaoAtiva = false
+    private var currentRisk: CrossingRiskAssessment? = null
 
     // Upgrade counters
     private var upgradeSemCount = 0
@@ -99,15 +103,39 @@ class StateMachine(
         faixaDet: Boolean,
         faixaCx: Float,
         wf: Int,
-        hf: Int
+        hf: Int,
+        risk: CrossingRiskAssessment? = null,
+        monitorHazards: Boolean = false,
+        guidedVerification: Boolean = false
     ) {
+        val alertsEnabled = estado != EST_INATIVO || monitorHazards
+        currentRisk = risk
         semCorAtual = semCorFrame
         faixaCentroX = faixaCx
-        if (estado != EST_INATIVO && veiculosReais.values.any { it.classif == "APROXIMANDO" }) {
+        if (alertsEnabled && faixaDet && semCorFrame == "VERMELHO")
+            voz.falarEstado("scene_light", "ped_red", config.tr("voice_red_light_wait"), VoicePriority.SAFETY)
+        else if (semCorFrame == "NENHUM") voz.observarEstado("scene_light", "not_observed", 1500)
+        val conflicting = risk?.vehicles?.firstOrNull { it.conflicting }
+        if (alertsEnabled && risk?.reasons?.contains(RiskReason.CROSSWALK_OCCUPIED) == true) {
+            voz.falarEstado("scene_obstruction", "occupied", RoadText.get(config.appLanguage,"crosswalk_occupied"), VoicePriority.SAFETY)
+        } else if (alertsEnabled && risk?.reasons?.contains(RiskReason.OBSTACLE_AHEAD) == true) {
+            voz.falarEstado("scene_obstruction", "obstacle", RoadText.get(config.appLanguage,"obstacle_ahead"), VoicePriority.SAFETY)
+        } else if (alertsEnabled && risk?.reasons?.contains(RiskReason.POTENTIAL_TRAFFIC_CONFLICT) == true) {
+            voz.falarEstado("scene_obstruction", "potential", RoadText.get(config.appLanguage,"traffic_potential"), VoicePriority.SAFETY)
+        } else voz.observarEstado("scene_obstruction","absent",1500)
+        if (alertsEnabled && conflicting != null) {
             aproximacaoAtiva = true
-            voz.falarEstado("scene_approach","approaching",config.tr("voice_vehicle_approaching"),VoicePriority.SAFETY)
+            val vehicle = veiculosReais[conflicting.trackId]
+            val side = if ((vehicle?.cx ?: wf / 2f) < wf / 2f) "left" else "right"
+            voz.falarEstado("scene_approach","approaching_$side",RoadText.get(config.appLanguage,"approaching_$side"),VoicePriority.SAFETY)
         } else if (voz.observarEstado("scene_approach","absent",1500)) {
             aproximacaoAtiva = false
+        }
+
+        if (guidedVerification) {
+            situacaoAtual = if (risk?.danger == true || semCorFrame == "VERMELHO") "AGUARDE" else "VERIFICANDO"
+            // A sequência orienta a câmera; alinhamento legado não deve pedir giro contrário.
+            return
         }
 
         when (estado) {
@@ -118,6 +146,11 @@ class StateMachine(
             EST_VIA_LIVRE    -> processarViaLivre(veiculosReais, nSemId, semCorFrame, faixaDet)
         }
     }
+
+    // Não transformar veículos laterais/ocultos em uma afirmação de ausência na imagem.
+    private fun trafficUnresolved(): Boolean = currentRisk?.let {
+        it.reasons.isNotEmpty() || !it.confidence.visualCurrent || !it.confidence.motionReliable
+    } == true
 
     // ================================================================
     //  RECONHECENDO
@@ -178,8 +211,8 @@ class StateMachine(
                 "VERMELHO", "AMARELO" -> {
                     situacaoAtual = "AGUARDE"
                     tViaLimpa = null
-                    voz.falarEstado("scene_light",semCorFrame,
-                        config.tr(if (semCorFrame == "AMARELO") "voice_yellow_light_wait" else "voice_red_light_wait"),VoicePriority.SAFETY)
+                    if (semCorFrame != "VERMELHO")
+                        voz.falarEstado("scene_light",semCorFrame, config.tr("voice_yellow_light_wait"),VoicePriority.SAFETY)
                     voz.observarEstado("scene_traffic","blocked_by_light")
                 }
                 // VERDE: verifica carros
@@ -212,6 +245,10 @@ class StateMachine(
     ) {
         val nvReais = veiculosReais.size
 
+        if (trafficUnresolved()) {
+            tViaLimpa = null; situacaoAtual = "AGUARDE"; return
+        }
+
         // Sem carros
         if (nvReais == 0 && nSemId == 0) {
             iniciarConfirmacao("none",agora)
@@ -225,7 +262,7 @@ class StateMachine(
         }
 
         // Tem carros em movimento
-        val temMovimento = veiculosReais.values.any { it.classif != "PARADO" } || nSemId > 0
+        val temMovimento = veiculosReais.values.any { it.classif == "APROXIMANDO" || it.classif == "EM_MOVIMENTO" } || nSemId > 0
         if (temMovimento) {
             tViaLimpa = null
             situacaoAtual = "AGUARDE"
@@ -366,6 +403,15 @@ class StateMachine(
         val agora = now()
         val nvReais = veiculosReais.size
 
+        if (trafficUnresolved()) {
+            tViaLimpa = null
+            situacaoAtual = "AGUARDE"
+            if (currentRisk?.reasons?.contains(RiskReason.MOTION_UNCERTAIN) == true &&
+                currentRisk?.reasons?.contains(RiskReason.POTENTIAL_TRAFFIC_CONFLICT) != true)
+                voz.falarEstado("scene_traffic", "uncertain", RoadText.get(config.appLanguage,"traffic_uncertain"))
+            return
+        }
+
         // Sem carros
         if (nvReais == 0 && nSemId == 0) {
             iniciarConfirmacao("none",agora)
@@ -379,7 +425,7 @@ class StateMachine(
             return
         }
 
-        val temMovimento = veiculosReais.values.any { it.classif != "PARADO" } || nSemId > 0
+        val temMovimento = veiculosReais.values.any { it.classif == "APROXIMANDO" || it.classif == "EM_MOVIMENTO" } || nSemId > 0
 
         if (temMovimento) {
             // Carro em movimento — resetar, não pode passar

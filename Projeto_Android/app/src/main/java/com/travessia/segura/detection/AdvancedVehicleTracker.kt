@@ -36,7 +36,8 @@ class AdvancedVehicleTracker(
         val highConfidenceMatches: Int = 0,
         val lowConfidenceRecoveries: Int = 0,
         val ghostCount: Int = 0,
-        val confirmedVisible: Int = 0
+        val confirmedVisible: Int = 0,
+        val unobservedTracks: Int = 0
     )
 
     private data class TrackState(
@@ -47,7 +48,8 @@ class AdvancedVehicleTracker(
         var confirmed: Boolean = false,
         var vxRelative: Float = 0f,
         var vyRelative: Float = 0f,
-        var confidenceEma: Float = det.confidence
+        var confidenceEma: Float = det.confidence,
+        var lastSeenMs: Long = 0L
     )
 
     private data class IndexedDetection(val originalIndex: Int, val det: RawDetection)
@@ -55,6 +57,9 @@ class AdvancedVehicleTracker(
 
     private val tracks = mutableMapOf<Int, TrackState>()
     private var nextId = 0
+    private var lastFrameMs = -1L
+    private var intervalSeconds = .1f
+    private var frameMs = 0L
 
     var lastStats: TrackerStats = TrackerStats()
         private set
@@ -64,8 +69,17 @@ class AdvancedVehicleTracker(
         frameWidth: Int,
         frameHeight: Int,
         cameraDx: Float = 0f,
-        cameraDy: Float = 0f
+        cameraDy: Float = 0f,
+        timestampMs: Long = System.nanoTime() / 1_000_000L
     ): List<TrackedDetection> {
+        if (timestampMs <= lastFrameMs) return emptyList()
+        intervalSeconds = if (lastFrameMs >= 0) ((timestampMs-lastFrameMs)/1000f).coerceIn(.001f,1.5f) else .1f
+        lastFrameMs = timestampMs
+        frameMs = timestampMs
+        // Expiração em tempo real, independente de FPS e do número de ghosts desenhados.
+        val oldCount = tracks.size
+        tracks.entries.removeAll { timestampMs-it.value.lastSeenMs > 1500 }
+        val expiredCount = oldCount - tracks.size
         val fw = frameWidth.coerceAtLeast(1).toFloat()
         val fh = frameHeight.coerceAtLeast(1).toFloat()
         val diagonal = hypot(fw, fh).coerceAtLeast(1f)
@@ -79,7 +93,7 @@ class AdvancedVehicleTracker(
         var highMatches = 0
         var lowRecoveries = 0
         var newTracks = 0
-        var removedTracks = 0
+        var removedTracks = expiredCount
 
         // Etapa 1: detecções mais confiáveis.
         val firstMatches = matchStage(
@@ -123,7 +137,7 @@ class AdvancedVehicleTracker(
         // persistir por mais frames antes de serem confirmadas.
         for (indexed in allIndexed) {
             if (indexed.originalIndex in matchedDetections) continue
-            val track = TrackState(det = indexed.det, trackId = nextId++)
+            val track = TrackState(det = indexed.det, trackId = nextId++, lastSeenMs = timestampMs)
             track.confirmed = shouldConfirm(track)
             tracks[track.trackId] = track
             matchedTracks.add(track.trackId) // observado no frame atual; não deve virar miss imediatamente
@@ -137,7 +151,7 @@ class AdvancedVehicleTracker(
             track.misses++
             track.det = predictNextObserved(track, cameraDx, cameraDy)
             track.confidenceEma *= 0.86f
-            if (track.misses > maxMisses) toRemove.add(track.trackId)
+            if (timestampMs - track.lastSeenMs > 1500) toRemove.add(track.trackId)
         }
         for (id in toRemove) {
             tracks.remove(id)
@@ -148,7 +162,7 @@ class AdvancedVehicleTracker(
         var ghosts = 0
         var visible = 0
         for (track in tracks.values.sortedBy { it.trackId }) {
-            if (!track.confirmed) continue
+            // Detecção nova/fraca é uma observação incerta, não ausência de veículo.
             if (track.misses == 0) {
                 visible++
                 result.add(track.toTracked(isGhost = false))
@@ -165,7 +179,8 @@ class AdvancedVehicleTracker(
             highConfidenceMatches = highMatches,
             lowConfidenceRecoveries = lowRecoveries,
             ghostCount = ghosts,
-            confirmedVisible = visible
+            confirmedVisible = visible,
+            unobservedTracks = tracks.values.count { it.misses > 0 }
         )
         return result
     }
@@ -178,6 +193,7 @@ class AdvancedVehicleTracker(
     fun reset() {
         tracks.clear()
         nextId = 0
+        lastFrameMs = -1L
         lastStats = TrackerStats()
     }
 
@@ -251,8 +267,8 @@ class AdvancedVehicleTracker(
         // Remove o movimento global da câmera antes de aprender a velocidade do objeto.
         val relativeDx = incoming.cx - cameraShiftedPrevious.cx
         val relativeDy = incoming.cy - cameraShiftedPrevious.cy
-        track.vxRelative = 0.58f * track.vxRelative + 0.42f * relativeDx
-        track.vyRelative = 0.58f * track.vyRelative + 0.42f * relativeDy
+        track.vxRelative = if (track.misses > 0) 0f else 0.58f * track.vxRelative + 0.42f * relativeDx / intervalSeconds
+        track.vyRelative = if (track.misses > 0) 0f else 0.58f * track.vyRelative + 0.42f * relativeDy / intervalSeconds
 
         val a = bboxSmoothingAlpha
         track.det = RawDetection(
@@ -265,6 +281,7 @@ class AdvancedVehicleTracker(
             confidence = incoming.confidence
         )
         track.misses = 0
+        track.lastSeenMs = frameMs
         track.hits++
         track.confidenceEma = 0.66f * incoming.confidence + 0.34f * track.confidenceEma
         if (!track.confirmed) track.confirmed = shouldConfirm(track)
@@ -273,16 +290,16 @@ class AdvancedVehicleTracker(
     private fun predictForMatching(track: TrackState, cameraDx: Float, cameraDy: Float): RawDetection {
         val damping = 0.88f.pow(track.misses.coerceAtLeast(0))
         return track.det.shift(
-            cameraDx + track.vxRelative * damping,
-            cameraDy + track.vyRelative * damping
+            cameraDx + track.vxRelative * intervalSeconds * damping,
+            cameraDy + track.vyRelative * intervalSeconds * damping
         )
     }
 
     private fun predictNextObserved(track: TrackState, cameraDx: Float, cameraDy: Float): RawDetection {
         val damping = 0.86f.pow(track.misses.coerceAtLeast(1) - 1)
         return track.det.shift(
-            cameraDx + track.vxRelative * damping,
-            cameraDy + track.vyRelative * damping
+            cameraDx + track.vxRelative * intervalSeconds * damping,
+            cameraDy + track.vyRelative * intervalSeconds * damping
         )
     }
 

@@ -41,7 +41,7 @@ class CrossingConsentController(private val activity: AppCompatActivity, private
         handler.postDelayed(timeout, 24000)
         voice.ask(text("AWAITING_CONFIRMATION")) { spoken ->
             if (token == generation && active) {
-                if (spoken) listen(token) else finish(false, "unheard")
+                if (spoken) listen(token) else dialog?.setMessage(text("question_interrupted"))
             }
         }
     }
@@ -120,7 +120,7 @@ class CrossingConsentController(private val activity: AppCompatActivity, private
     private fun finish(accepted: Boolean, key: String) {
         val answer = callback ?: return
         cancel()
-        voice.forcar("crossing_consent", text(key))
+        voice.falar("crossing_consent", text(key))
         answer(accepted)
     }
 
@@ -131,6 +131,6 @@ class CrossingConsentController(private val activity: AppCompatActivity, private
         recognizer?.cancel(); recognizer?.destroy(); recognizer = null
         tone?.release(); tone = null
         dialog?.dismiss(); dialog = null
-        if (wasActive) voice.interromper()
+        if (wasActive) voice.cancelQuestion()
     }
 }

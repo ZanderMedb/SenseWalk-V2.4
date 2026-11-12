@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.util.Log
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.DataType
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -36,6 +37,7 @@ class YoloDetector(
     private var inputSize: Int = 640
 
     private lateinit var inputBuffer: ByteBuffer
+    private lateinit var inputPixels: IntArray
     private lateinit var outputBuffer: Array<Array<FloatArray>>
 
     private var outputTransposed = true
@@ -74,6 +76,8 @@ class YoloDetector(
 
             val inputTensor = interp.getInputTensor(0)
             val inputShape = inputTensor.shape()
+            require(inputShape.size == 4 && inputShape[0] == 1 && inputShape[1] == inputShape[2] &&
+                inputShape[3] == 3 && inputTensor.dataType() == DataType.FLOAT32) { "Unsupported YOLO input contract" }
             Log.i(TAG, "Input shape: ${inputShape.toList()}, type: ${inputTensor.dataType()}")
 
             if (inputShape.size == 4) {
@@ -92,10 +96,14 @@ class YoloDetector(
             inputBuffer = ByteBuffer.allocateDirect(inputBytes).apply {
                 order(ByteOrder.nativeOrder())
             }
+            inputPixels = IntArray(inputSize * inputSize)
             Log.i(TAG, "Input buffer: $inputBytes bytes (${inputSize}x${inputSize}x3xFLOAT32)")
 
             val outputTensor = interp.getOutputTensor(0)
             val outputShape = outputTensor.shape()
+            require(interp.outputTensorCount == 1 && outputTensor.dataType() == DataType.FLOAT32 &&
+                outputShape.size == 3 && outputShape[0] == 1 &&
+                (outputShape[1] == numFeatures || outputShape[2] == numFeatures)) { "YOLO classes/output contract mismatch" }
             Log.i(TAG, "Output shape: ${outputShape.toList()}, type: ${outputTensor.dataType()}")
 
             if (outputShape.size != 3) {
@@ -158,6 +166,7 @@ class YoloDetector(
         } catch (e: Exception) {
             Log.e(TAG, "❌ Erro ao inicializar: ${e.message}", e)
             isReady = false
+            interpreter?.close(); interpreter = null
         }
     }
 
@@ -192,13 +201,10 @@ class YoloDetector(
     @Synchronized
     fun detectar(bitmap: Bitmap, confMinima: Float, rotationDegrees: Int = 0): List<RawDetection> {
         val interp = interpreter
-        if (!isReady || interp == null) {
-            Log.w(TAG, "detectar() chamado mas detector não está pronto")
-            return emptyList()
-        }
+        check(isReady && interp != null) { "YOLO indisponível: não é uma observação sem veículos" }
 
         inferenceCount++
-        val startTime = System.currentTimeMillis()
+        val startTime = android.os.SystemClock.elapsedRealtime()
 
         val rotated = if (rotationDegrees != 0) {
             val matrix = Matrix()
@@ -224,7 +230,7 @@ class YoloDetector(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erro na inferência: ${e.message}", e)
-            return emptyList()
+            throw IllegalStateException("Falha YOLO: resultado inválido", e)
         }
 
         val output = outputBuffer[0]
@@ -234,17 +240,17 @@ class YoloDetector(
             logDiagnostico(output, "PRIMEIRO FRAME REAL")
         }
 
-        if (inferenceCount % 60 == 0L) {
+        if (inferenceCount % 600 == 0L) {
             logDiagnostico(output, "Frame #$inferenceCount")
         }
 
         val deteccoes = parsearOutput(output, confMinima, origW, origH)
         val resultado = nms(deteccoes, 0.45f)
 
-        val elapsed = System.currentTimeMillis() - startTime
+        val elapsed = android.os.SystemClock.elapsedRealtime() - startTime
         lastInferenceTimeMs = elapsed
 
-        if (inferenceCount <= 10 || inferenceCount % 30 == 0L || resultado.isNotEmpty()) {
+        if (inferenceCount <= 10 || inferenceCount % 60 == 0L) {
             Log.d(TAG, "Frame #$inferenceCount: ${elapsed}ms, " +
                     "préNMS=${deteccoes.size}, pósNMS=${resultado.size}, " +
                     "confMin=$confMinima, " +
@@ -367,17 +373,18 @@ class YoloDetector(
         val w = bitmap.width
         val h = bitmap.height
 
-        val ratio = minOf(inputSize.toFloat() / w, inputSize.toFloat() / h)
-        val newW = (w * ratio).toInt()
-        val newH = (h * ratio).toInt()
-        val padW = (inputSize - newW) / 2f
-        val padH = (inputSize - newH) / 2f
+        val geometry = YoloGeometry(w,h,inputSize)
+        val ratio = geometry.ratio
+        val newW = geometry.resizedWidth
+        val newH = geometry.resizedHeight
+        val padW = geometry.padX
+        val padH = geometry.padY
 
         lastRatio = ratio
         lastPadW = padW
         lastPadH = padH
 
-        if (newW == inputSize && newH == inputSize) return bitmap
+        if (geometry.canReuseOriginal) return bitmap
 
         val resized = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
 
@@ -396,7 +403,7 @@ class YoloDetector(
 
     private fun preencherInput(bitmap: Bitmap) {
         inputBuffer.rewind()
-        val pixels = IntArray(inputSize * inputSize)
+        val pixels = inputPixels
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
         for (pixel in pixels) {
@@ -404,6 +411,7 @@ class YoloDetector(
             inputBuffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
             inputBuffer.putFloat((pixel and 0xFF) / 255.0f)
         }
+        inputBuffer.rewind()
     }
 
     // ══════════════════════════════════════════
@@ -524,10 +532,11 @@ class YoloDetector(
     // ══════════════════════════════════════════
 
     private fun carregarModelo(): MappedByteBuffer {
-        val fd = context.assets.openFd(modelPath)
-        val stream = FileInputStream(fd.fileDescriptor)
-        val channel = stream.channel
-        return channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
+        return context.assets.openFd(modelPath).use { fd ->
+            FileInputStream(fd.fileDescriptor).channel.use { channel ->
+                channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
+            }
+        }
     }
 
     @Synchronized

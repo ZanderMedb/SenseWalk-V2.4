@@ -1,0 +1,35 @@
+ M Projeto_Android/app/src/main/java/com/travessia/segura/benchmark/BenchmarkLogger.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/camera/ExternalFrameProcessor.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/camera/FrameAnalyzer.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/config/AppConfig.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/config/LanguageManager.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/detection/AdvancedVehicleTracker.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/detection/Models.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/detection/YoloDetector.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/logic/StateMachine.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/road/AutomaticDetectionManager.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/road/InferenceCoordinator.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/road/RoadText.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/tracking/Rastreador.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/ui/MainActivity.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/ui/OverlayView.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/ui/SettingsActivity.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/vision/SparseOpticalFlowEstimator.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/voice/VoicePriority.kt
+ M Projeto_Android/app/src/main/java/com/travessia/segura/voice/VoiceSystem.kt
+ M Projeto_Android/app/src/main/res/layout/activity_main.xml
+ M Projeto_Android/app/src/test/java/com/travessia/segura/road/RoadMonitoringTest.kt
+ M Projeto_Android/app/src/test/java/com/travessia/segura/voice/VoiceMessageSchedulerTest.kt
+ M README.md
+?? DOCUMENTACAO_MELHORIAS_TRAVESSIA.md
+?? Projeto_Android/app/src/main/java/com/travessia/segura/camera/FrameValidity.kt
+?? Projeto_Android/app/src/main/java/com/travessia/segura/detection/YoloGeometry.kt
+?? Projeto_Android/app/src/main/java/com/travessia/segura/road/CrossingRiskAssessment.kt
+?? Projeto_Android/app/src/main/java/com/travessia/segura/road/CrossingVerification.kt
+?? Projeto_Android/app/src/main/java/com/travessia/segura/road/HazardMonitoringPolicy.kt
+?? Projeto_Android/app/src/main/java/com/travessia/segura/road/SceneEvidence.kt
+?? Projeto_Android/app/src/main/java/com/travessia/segura/tracking/VehicleMotionRules.kt
+?? Projeto_Android/app/src/test/java/com/travessia/segura/road/AstraSafetyRegressionTest.kt
+?? Projeto_Android/app/src/test/java/com/travessia/segura/road/CrossingVerificationTest.kt
+?? Projeto_Android/app/src/test/java/com/travessia/segura/tracking/
+?? Projeto_Android/tools/summarize_latency.py

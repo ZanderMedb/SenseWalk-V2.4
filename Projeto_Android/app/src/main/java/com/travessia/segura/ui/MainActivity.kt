@@ -38,6 +38,9 @@ import com.travessia.segura.benchmark.BenchmarkLogger
 import com.travessia.segura.detection.YoloDetector
 import com.travessia.segura.logic.StateMachine
 import com.travessia.segura.tracking.Rastreador
+import com.travessia.segura.road.CrossingVerification
+import com.travessia.segura.road.RoadText
+import com.travessia.segura.voice.VoicePriority
 import com.travessia.segura.voice.VoiceSystem
 import com.travessia.segura.voice.VoiceCommandController
 import androidx.camera.core.*
@@ -77,6 +80,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvAlertStatus: TextView
     private lateinit var tvScreenTitle: TextView
     private lateinit var btnToggle: Button
+    private lateinit var btnCrossing: Button
     private lateinit var btnConfig: Button
     private lateinit var btnSource: Button
     private lateinit var btnVoice: Button
@@ -98,6 +102,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var roadCoordinator: com.travessia.segura.road.InferenceCoordinator
     private lateinit var crossingConsent: com.travessia.segura.road.CrossingConsentController
+    private lateinit var crossing: CrossingVerification
+    private data class PendingPreview(val bitmap: Bitmap, val generation: Long, val timestampMs: Long)
+    private val previewHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val previewDispatcher = com.travessia.segura.camera.LatestFrameDispatcher<PendingPreview>(
+        post = { action -> previewHandler.post { action() } },
+        discard = { it.bitmap.recycle() },
+        consume = { frame ->
+            if (foreground && !isDestroyed && cameraMode != MODE_LOCAL_CAMERA &&
+                frame.generation == roadCoordinator.resultToken &&
+                SystemClock.elapsedRealtime() - frame.timestampMs in 0..1500) {
+                externalImageView?.setImageBitmap(frame.bitmap)
+                externalPreviewBitmap?.recycle()
+                externalPreviewBitmap = frame.bitmap
+            } else frame.bitmap.recycle()
+        }
+    )
     private var roadMicRequested = false
     private var foreground = false
     private var lastRoadState: com.travessia.segura.road.AnalysisState? = null
@@ -107,6 +127,7 @@ class MainActivity : AppCompatActivity() {
             if (!foreground || !::roadCoordinator.isInitialized) return
             val last = roadCoordinator.lastFrameArrivalMs
             if ((isActive || roadCoordinator.running) && last > 0 && SystemClock.elapsedRealtime() - last > 3000) {
+                if (::crossing.isInitialized) crossing.cancel()
                 overlayView.clear(); roadCoordinator.reportVideoError()
             }
             window.decorView.postDelayed(this, 1000)
@@ -188,6 +209,7 @@ class MainActivity : AppCompatActivity() {
         tvAlertStatus = findViewById(R.id.tvAlertStatus)
         tvScreenTitle = findViewById(R.id.tvScreenTitle)
         btnToggle = findViewById(R.id.btnToggle)
+        btnCrossing = findViewById(R.id.btnCrossing)
         btnConfig = findViewById(R.id.btnConfig)
         btnSource = findViewById(R.id.btnSource)
         btnVoice = findViewById(R.id.btnVoice)
@@ -198,6 +220,9 @@ class MainActivity : AppCompatActivity() {
 
         btnToggle.isEnabled = false
         btnToggle.setOnClickListener { toggleAnalysis() }
+        btnCrossing.setOnClickListener {
+            crossing.confirmCameraDirection(SystemClock.elapsedRealtime())
+        }
         btnConfig.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
@@ -218,6 +243,7 @@ class MainActivity : AppCompatActivity() {
     private fun initEngine() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         voz = VoiceSystem(this, config)
+        crossing = CrossingVerification { stage -> runOnUiThread { updateCrossingStage(stage) } }
         crossingConsent = com.travessia.segura.road.CrossingConsentController(this, voz) { config.appLanguage }
         roadCoordinator = com.travessia.segura.road.InferenceCoordinator(this, config,
             manual = { isActive },
@@ -228,13 +254,16 @@ class MainActivity : AppCompatActivity() {
                 }
             },
             onDebug = { frame -> runOnUiThread {
-                if (foreground) {
+                if (foreground && frame.sessionToken == roadCoordinator.resultToken) {
                     val contextOnly = frame.reason == "ffnet_stale" && roadCoordinator.hasRecentYoloResult
-                    if ((frame.reason in setOf("stale_frame","ffnet_stale") && !contextOnly) || frame.state == com.travessia.segura.road.AnalysisState.ERROR) overlayView.clear()
+                    if ((frame.reason in setOf("stale_frame","ffnet_stale") && !contextOnly) || frame.state == com.travessia.segura.road.AnalysisState.ERROR) {
+                        crossing.invalidate(); overlayView.clear()
+                    }
                     overlayView.updateRoad(frame)
                     val messageState = when {
                         contextOnly -> "context_only"
                         frame.reason in setOf("stale_frame","ffnet_stale") -> "stale_frame"
+                        frame.reason == "video_error" -> "video_error"
                         frame.state == com.travessia.segura.road.AnalysisState.ACTIVE_ANALYSIS && roadCoordinator.successfulYoloFrames == 0L -> "STARTING_ANALYSIS"
                         else -> frame.state.name
                     }
@@ -250,6 +279,7 @@ class MainActivity : AppCompatActivity() {
                         announcedYoloStarted = false
                         crossingConsent.ask { accepted -> cameraExecutor.execute {
                             val started = roadCoordinator.answerCrossing(accepted)
+                            if (started) crossing.start(SystemClock.elapsedRealtime())
                             if (accepted && !started) runOnUiThread {
                                 if (foreground) voz.forcar("crossing_stale", com.travessia.segura.road.RoadText.get(config.appLanguage,"unheard"))
                             }
@@ -261,14 +291,15 @@ class MainActivity : AppCompatActivity() {
                     if (frame.state in setOf(
                             com.travessia.segura.road.AnalysisState.ERROR,
                             com.travessia.segura.road.AnalysisState.INCONCLUSIVE) && !crossingConsent.active && !contextOnly) {
-                        voz.falarEstado("road_status",messageState,message,com.travessia.segura.voice.VoicePriority.INFO,
+                        voz.falarEstado("road_status",messageState,message,
+                            if (frame.reason == "video_error") VoicePriority.SAFETY else VoicePriority.INFO,
                             settleMs=if (frame.state == com.travessia.segura.road.AnalysisState.ERROR) 0 else 1500)
                     } else if (!crossingConsent.active) {
                         voz.observarEstado("road_status","healthy",1500)
                     }
                     lastRoadState = frame.state
                 }
-            } })
+            } }, onInvalidated = { crossing.invalidate(); voz.resetarEstados("crossing_") })
 
         Thread {
             detector = YoloDetector(
@@ -294,17 +325,20 @@ class MainActivity : AppCompatActivity() {
                         tracker = rastreador,
                         stateMachine = stateMachine,
                         benchmarkLogger = benchmarkLogger,
-                        onStatusUpdate = { estado, situacao, nVeiculos, semCor ->
+                        onStatusUpdate = { estado, situacao, nVeiculos, semCor, capturedAt, token ->
                             runOnUiThread {
-                                atualizarUI(estado, situacao, nVeiculos, semCor)
+                                if (token != null && roadCoordinator.acceptsResult(token,capturedAt))
+                                    atualizarUI(estado, situacao, nVeiculos, semCor)
                             }
                         },
-                        onOverlayUpdate = { boxes, w, h, rot ->
+                        onOverlayUpdate = { boxes, w, h, rot, capturedAt, token ->
                             runOnUiThread {
-                                if (foreground) overlayView.updateDetections(boxes, w, h, rot)
+                                if (foreground && token != null && roadCoordinator.acceptsResult(token,capturedAt) &&
+                                    (config.mostrarOverlay || config.roadDebugOverlay)) overlayView.updateDetections(boxes, w, h, rot)
                             }
                         },
-                        coordinator = roadCoordinator
+                        coordinator = roadCoordinator,
+                        crossing = crossing
                     )
 
                     // Preparar FrameAnalyzer para câmera local
@@ -315,17 +349,20 @@ class MainActivity : AppCompatActivity() {
                         tracker = rastreador,
                         stateMachine = stateMachine,
                         benchmarkLogger = benchmarkLogger,
-                        onStatusUpdate = { estado, situacao, nVeiculos, semCor ->
+                        onStatusUpdate = { estado, situacao, nVeiculos, semCor, capturedAt, token ->
                             runOnUiThread {
-                                atualizarUI(estado, situacao, nVeiculos, semCor)
+                                if (token != null && roadCoordinator.acceptsResult(token,capturedAt))
+                                    atualizarUI(estado, situacao, nVeiculos, semCor)
                             }
                         },
-                        onOverlayUpdate = { boxes, w, h, rot ->
+                        onOverlayUpdate = { boxes, w, h, rot, capturedAt, token ->
                             runOnUiThread {
-                                if (foreground) overlayView.updateDetections(boxes, w, h, rot)
+                                if (foreground && token != null && roadCoordinator.acceptsResult(token,capturedAt) &&
+                                    (config.mostrarOverlay || config.roadDebugOverlay)) overlayView.updateDetections(boxes, w, h, rot)
                             }
                         },
-                        coordinator = roadCoordinator
+                        coordinator = roadCoordinator,
+                        crossing = crossing
                     )
 
                     tvInfo.text = tr("ready_wifi")
@@ -455,6 +492,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         cameraMode = mode
+        resetVision(); crossing.cancel()
         atualizarUIFonte()
         configurarFonte()
         val confirmation = if (mode == MODE_LOCAL_CAMERA) {
@@ -495,6 +533,7 @@ class MainActivity : AppCompatActivity() {
             .setItems(arrayOf(tr("source_local"), "X5 Wi-Fi", "USB / UVC")) { _, selected ->
                 pararUsb(); pararX5(); pararCameraLocal()
                 cameraMode = selected; config.cameraSource = selected
+                resetVision(); crossing.cancel()
                 overlayView.clear(); atualizarUIFonte(); configurarFonte()
             }.show()
     }
@@ -654,6 +693,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun receberFrameX5(frame: VideoFrame) {
+        val generation = roadCoordinator.resultToken
         val bitmap = if (frame.rotationDegrees == 0) {
             frame.bitmap
         } else {
@@ -665,13 +705,7 @@ class MainActivity : AppCompatActivity() {
         val previewBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false)
         lastX5FrameNanos = normalized.timestampNanos
         x5StaleReported = false
-        runOnUiThread {
-            if (cameraMode != MODE_LOCAL_CAMERA && foreground && !isDestroyed) {
-                externalImageView?.setImageBitmap(previewBitmap)
-                externalPreviewBitmap?.recycle()
-                externalPreviewBitmap = previewBitmap
-            } else previewBitmap.recycle()
-        }
+        previewDispatcher.offer(PendingPreview(previewBitmap,generation,frame.timestampNanos / 1_000_000))
         val sent = if ((isActive || roadCoordinator.running) && cameraMode != MODE_LOCAL_CAMERA) x5FrameChannel?.trySend(normalized)?.isSuccess == true else false
         if (!sent) bitmap.recycle()
     }
@@ -731,6 +765,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pararX5() {
+        previewDispatcher.clear()
         x5Client?.stop()
         x5FrameChannel?.cancel()
         x5FrameChannel = null
@@ -743,10 +778,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun invalidarVideoExterno(reason: String) {
+        crossing.cancel()
         roadCoordinator.reportVideoError()
         if (cameraMode == MODE_LOCAL_CAMERA) return
         overlayView.clear()
-        externalProcessor?.resetar()
+        resetVision()
         if (::stateMachine.isInitialized && isActive) stateMachine.entrarEstado(EST_RECONHECENDO)
         lastVehicleCount = 0
         lastSituation = "VERIFICANDO"
@@ -797,7 +833,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(1280, 720))
+                .setTargetResolution(Size(config.captureWidth, config.captureWidth * 9 / 16))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
 
@@ -812,13 +848,13 @@ class MainActivity : AppCompatActivity() {
                     analysis
                 )
                 camera.cameraInfo.cameraState.observe(this) { state ->
-                    if (state.error != null) { overlayView.clear(); roadCoordinator.reportVideoError() }
+                    if (state.error != null) { crossing.invalidate(); overlayView.clear(); roadCoordinator.reportVideoError() }
                 }
                 Log.i(TAG, "Camera local iniciada")
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao iniciar camera: ${e.message}")
                 tvInfo.text = "${tr("camera_error")}: ${e.message}"
-                if (::voz.isInitialized) voz.forcar("camera_failure", "Câmera indisponível. Não foi possível avaliar o ambiente.")
+                if (::voz.isInitialized) voz.forcar("camera_failure", RoadText.get(config.appLanguage,"video_error"))
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -829,7 +865,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleAnalysis() {
         crossingConsent.cancel()
+        crossing.cancel()
         if (!isActive && roadCoordinator.running) {
+            voz.interromper(preserveSafety = false)
             config.automaticRoadDetection = false
             roadCoordinator.suspendMonitoring()
             cameraExecutor.execute { roadCoordinator.release() }
@@ -843,6 +881,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setAnalysisActive(active: Boolean) {
         crossingConsent.cancel()
+        crossing.cancel()
         if (active) cameraExecutor.execute { roadCoordinator.answerCrossing(false) }
         if (!active && ::roadCoordinator.isInitialized && roadCoordinator.running) {
             config.automaticRoadDetection = false
@@ -858,8 +897,7 @@ class MainActivity : AppCompatActivity() {
                 benchmarkLogger.startSession(source)
             }
             // Começar cada sessão sem IDs/histórico herdados da sessão anterior.
-            frameAnalyzer?.resetar()
-            externalProcessor?.resetar()
+            resetVision()
             stateMachine.entrarEstado(EST_RECONHECENDO)
             voz.forcar("inicio", tr("analysis_start_voice"))
             btnToggle.text = tr("stop")
@@ -876,6 +914,7 @@ class MainActivity : AppCompatActivity() {
             Log.i(TAG, "Análise iniciada (modo: $cameraMode)")
         } else {
             val benchmarkResult = benchmarkLogger.stopSession()
+            voz.interromper(preserveSafety = false)
             stateMachine.entrarEstado(EST_INATIVO)
             voz.forcar("cancelado", tr("analysis_stop_voice"))
             btnToggle.text = tr("start")
@@ -892,8 +931,7 @@ class MainActivity : AppCompatActivity() {
             lastVehicleCount = 0
             lastSituation = "VERIFICANDO"
             overlayView.clear()
-            frameAnalyzer?.resetar()
-            externalProcessor?.resetar()
+            resetVision()
             if (cameraMode == MODE_X5_CAMERA && !roadCoordinator.running) pararX5()
             if (cameraMode == MODE_USB_CAMERA && !roadCoordinator.running) pararUsb()
 
@@ -905,9 +943,55 @@ class MainActivity : AppCompatActivity() {
     //  UI
     // ================================================================
 
+    private fun resetVision() {
+        roadCoordinator.invalidateSession()
+        cameraExecutor.execute {
+            synchronized(roadCoordinator) { frameAnalyzer?.resetar(); externalProcessor?.resetar() }
+        }
+    }
+
+    private fun updateCrossingStage(stage: CrossingVerification.Stage) {
+        if (!foreground || crossing.stage != stage) return // descartar callbacks superados na UI
+        val buttonKey = when (stage) {
+            CrossingVerification.Stage.AWAIT_RIGHT -> "confirm_right"
+            CrossingVerification.Stage.AWAIT_LEFT -> "confirm_left"
+            CrossingVerification.Stage.AWAIT_FRONT -> "confirm_front"
+            else -> null
+        }
+        btnCrossing.visibility = if (buttonKey != null) View.VISIBLE else View.GONE
+        if (buttonKey != null) {
+            btnCrossing.text = RoadText.get(config.appLanguage, buttonKey)
+            btnCrossing.contentDescription = btnCrossing.text
+        }
+        val key = when (stage) {
+            CrossingVerification.Stage.ANALYZING -> "verify_analyzing"
+            CrossingVerification.Stage.AWAIT_RIGHT -> "verify_right"
+            CrossingVerification.Stage.AWAIT_LEFT -> "verify_left"
+            CrossingVerification.Stage.AWAIT_FRONT -> "verify_front"
+            CrossingVerification.Stage.FAVORABLE_OBSERVATION -> "verify_favorable"
+            CrossingVerification.Stage.DANGER -> "verify_danger"
+            CrossingVerification.Stage.INCONCLUSIVE ->
+                when {
+                    crossing.cannotVerifyDirection -> "verify_direction_unavailable"
+                    crossing.cannotAssessWithoutCrosswalk -> "verify_no_crosswalk"
+                    else -> "verify_inconclusive"
+                }
+            else -> null
+        }
+        if (key != null) {
+            val prefix = if (stage == CrossingVerification.Stage.AWAIT_RIGHT && crossing.hasCrosswalk)
+                RoadText.get(config.appLanguage,"verify_crosswalk") + " " else ""
+            val text = prefix + RoadText.get(config.appLanguage, key)
+            tvInfo.text = text
+            voz.falarEstado("crossing_stage", stage.name, text,
+                if (stage == CrossingVerification.Stage.DANGER) VoicePriority.SAFETY else VoicePriority.CROSSING)
+        } else if (stage != CrossingVerification.Stage.MONITORING) voz.observarEstado("crossing_stage",stage.name)
+    }
+
     private fun atualizarUI(estado: String, situacao: String, nVeiculos: Int, semCor: String) {
         if (!foreground) return
-        if (roadCoordinator.running && !isActive && !announcedYoloStarted && roadCoordinator.successfulYoloFrames > 0) {
+        if (roadCoordinator.running && !isActive && crossing.stage != CrossingVerification.Stage.IDLE &&
+            !announcedYoloStarted && roadCoordinator.successfulYoloFrames > 0) {
             announcedYoloStarted = true
             val message = com.travessia.segura.road.RoadText.get(config.appLanguage,"ACTIVE_ANALYSIS")
             tvInfo.text = message
@@ -1008,6 +1092,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        crossing.cancel()
         foreground = false
         pararUsb()
         crossingConsent.cancel()
@@ -1020,7 +1105,7 @@ class MainActivity : AppCompatActivity() {
         isActive = false
         benchmarkLogger.stopSession()
         if (::voiceCommands.isInitialized) voiceCommands.cancel()
-        if (::voz.isInitialized) voz.interromper()
+        if (::voz.isInitialized) voz.interromper(preserveSafety = false)
         // RTSP sockets must not survive in the background; the user can restart explicitly.
         overlayView.clear()
     }

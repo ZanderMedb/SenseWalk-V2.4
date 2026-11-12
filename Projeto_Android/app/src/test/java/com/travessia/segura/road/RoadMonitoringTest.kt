@@ -27,7 +27,7 @@ class RoadMonitoringTest {
     @Test fun `visible road alone never activates`() {
         val machine = AutomaticDetectionManager(); machine.start()
         for (t in 1000L..10000L step 500) assertNotEquals(AnalysisState.ACTIVE_ANALYSIS, machine.update(sample(t,boundary=false),t))
-        assertEquals(AnalysisState.AWAITING_CONFIRMATION,machine.state)
+        assertEquals(AnalysisState.MONITORING,machine.state)
     }
     @Test fun `active analysis persists across loss and while yolo still sees hazards`() {
         val machine = AutomaticDetectionManager(500,5000,5000); machine.start()

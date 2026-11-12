@@ -41,11 +41,11 @@ class FFNetRuntimeTest {
                     InferenceCoordinator(context,config,{manual},{},{semanticRuns++}).use { coordinator ->
                         coordinator.start()
                         coordinator.process(bitmap,0,android.os.SystemClock.elapsedRealtime()) { manualRuns++; yolo.detectar(bitmap,.25f) }
-                        assertEquals(0,manualRuns) // amostra tem pista mas quase nenhuma calçada na ROI
+                        assertEquals(1,manualRuns) // alertas ativos antes do consentimento; não inicia travessia
                         manual = true
                         coordinator.suspendMonitoring() // análise manual independe do FFNet/automático
                         coordinator.process(bitmap,0,android.os.SystemClock.elapsedRealtime()) { manualRuns++; yolo.detectar(bitmap,.25f) }
-                        assertEquals(1,manualRuns)
+                        assertEquals(2,manualRuns)
                         assertTrue(semanticRuns > 0)
                         coordinator.suspendMonitoring(); manual = false
                         coordinator.process(bitmap,0,android.os.SystemClock.elapsedRealtime()) { fail("Processou após parar") }

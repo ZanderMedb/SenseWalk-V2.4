@@ -87,9 +87,7 @@ class OverlayView @JvmOverloads constructor(
     private val tempRect = RectF()
     private val labelRect = RectF()
 
-    // IDs de classes de veículos (COCO)
-    private val vehicleClassIds = setOf(1, 2, 3, 5, 6, 7) // bicycle, car, motorcycle, bus, train, truck
-    private val personClassId = 0
+    // O modelo do app NÃO usa índices COCO; a classe 0 é car, não person.
 
     // ══════════════════════════════════════════
     //  API PÚBLICA
@@ -165,12 +163,13 @@ class OverlayView @JvmOverloads constructor(
      */
     private fun getColorForDetection(det: RawDetection, alertActive: Boolean): Int {
         return when {
-            det.classId in vehicleClassIds -> {
+            det.className in setOf("car","motorcycle","bicycle","truck","bus") -> {
                 if (alertActive) COLOR_APROXIMANDO else COLOR_EM_MOVIMENTO
             }
-            det.classId == personClassId -> COLOR_PESSOA
-            det.classId == 9 -> COLOR_SEM_VERDE  // traffic light
-            det.classId == 11 -> COLOR_SEM_OUTRO // stop sign
+            det.className == "crosswalk" -> COLOR_FAIXA
+            det.className == "pedestrian-light-green" -> COLOR_SEM_VERDE
+            det.className == "pedestrian-light-red" -> COLOR_SEM_VERMELHO
+            det.className.startsWith("traffic-light-") -> COLOR_SEM_OUTRO
             else -> COLOR_OUTROS
         }
     }

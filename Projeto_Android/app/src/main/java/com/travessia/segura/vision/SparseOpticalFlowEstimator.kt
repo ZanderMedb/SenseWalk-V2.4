@@ -38,7 +38,8 @@ class SparseOpticalFlowEstimator(
     private var previousW: Int = 0
     private var previousH: Int = 0
 
-    fun estimate(bitmap: Bitmap, rotationDegrees: Int = 0): MotionEstimate {
+    /** excludeBoxes: detecções do frame anterior no referencial orientado do detector. */
+    fun estimate(bitmap: Bitmap, rotationDegrees: Int = 0, excludeBoxes: List<FloatArray> = emptyList()): MotionEstimate {
         val started = SystemClock.elapsedRealtimeNanos()
         val sampled = sampleGray(bitmap)
 
@@ -52,13 +53,15 @@ class SparseOpticalFlowEstimator(
 
         val vectorsX = mutableListOf<Int>()
         val vectorsY = mutableListOf<Int>()
+        val origins = mutableListOf<Pair<Int, Int>>()
         val margin = blockRadius + searchRadius + 1
 
         var y = margin
         while (y < sampled.height - margin) {
             var x = margin
             while (x < sampled.width - margin) {
-                if (hasEnoughTexture(prev, sampled.width, x, y)) {
+                if (!excluded(x, y, sampled.width, sampled.height, bitmap.width, bitmap.height, rotationDegrees, excludeBoxes) &&
+                    hasEnoughTexture(prev, sampled.width, x, y)) {
                     val match = findBestDisplacement(
                         prev = prev,
                         curr = sampled.gray,
@@ -69,6 +72,7 @@ class SparseOpticalFlowEstimator(
                     if (match != null) {
                         vectorsX.add(match.first)
                         vectorsY.add(match.second)
+                        origins.add(x to y)
                     }
                 }
                 x += gridStep
@@ -96,6 +100,11 @@ class SparseOpticalFlowEstimator(
         val inliers = vectorsX.indices.filter { i ->
             abs(vectorsX[i] - medX) <= 2 && abs(vectorsY[i] - medY) <= 2
         }
+        // Um único veículo ou região texturizada não deve representar o fundo inteiro.
+        val covered = inliers.map { index ->
+            (if (origins[index].first < sampled.width / 2) 0 else 1) +
+                (if (origins[index].second < sampled.height / 2) 0 else 2)
+        }.toSet().size
 
         val robustX: Float
         val robustY: Float
@@ -115,7 +124,7 @@ class SparseOpticalFlowEstimator(
         val rotated = rotateVector(rawDx, rawDy, rotationDegrees)
         val inlierRatio = inliers.size.toFloat() / vectorsX.size.toFloat()
         val pointFactor = min(1f, vectorsX.size / 14f)
-        val confidence = (inlierRatio * pointFactor).coerceIn(0f, 1f)
+        val confidence = (inlierRatio * pointFactor * if (covered >= 3) 1f else 0f).coerceIn(0f, 1f)
 
         return MotionEstimate(
             dx = rotated.first,
@@ -130,6 +139,21 @@ class SparseOpticalFlowEstimator(
         previousGray = null
         previousW = 0
         previousH = 0
+    }
+
+    private fun excluded(x: Int, y: Int, sw: Int, sh: Int, bw: Int, bh: Int,
+                         rotation: Int, boxes: List<FloatArray>): Boolean {
+        val px = x.toFloat() * bw / sw
+        val py = y.toFloat() * bh / sh
+        val (rx, ry) = when (((rotation % 360) + 360) % 360) {
+            90 -> bh - py to px
+            180 -> bw - px to bh - py
+            270 -> py to bw - px
+            else -> px to py
+        }
+        val margin = min(bw, bh) * 0.02f
+        return boxes.any { b -> b.size >= 4 && rx >= b[0] - margin && rx <= b[2] + margin &&
+            ry >= b[1] - margin && ry <= b[3] + margin }
     }
 
     private data class SampledGray(val gray: IntArray, val width: Int, val height: Int)

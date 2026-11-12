@@ -84,6 +84,7 @@ class SettingsActivity : AppCompatActivity() {
         addSwitch(roadText("debug"), config.roadDebugOverlay) { config.roadDebugOverlay = it }
         addSliderInt(roadText("seg_fps"), config.roadSegmentationFps, 1, 5) { config.roadSegmentationFps = it }
         addSliderInt(roadText("yolo_fps"), config.roadYoloFps, 1, 30) { config.roadYoloFps = it }
+        addSpinnerInt(roadText("capture_width"), config.captureWidth, listOf(640,960,1280)) { config.captureWidth = it }
         addSliderInt(roadText("confirm"), config.roadConfirmationMs, 500, 5000) { config.roadConfirmationMs = it }
         addSliderInt(roadText("hold"), config.roadHoldMs, 5000, 60000) { config.roadHoldMs = it }
         addSliderInt(roadText("cooldown"), config.roadCooldownMs, 5000, 60000) { config.roadCooldownMs = it }

@@ -30,7 +30,8 @@ class BenchmarkLogger(private val context: Context) {
         val motionConfidence: Float,
         val trackerStats: AdvancedVehicleTracker.TrackerStats,
         val state: String,
-        val situation: String
+        val situation: String,
+        val frameAgeMs: Long = -1L
     )
 
     data class SessionResult(
@@ -69,7 +70,7 @@ class BenchmarkLogger(private val context: Context) {
                 "timestamp_ms,frame,source,total_ms,inference_ms,optical_flow_ms," +
                     "raw_vehicles,context_objects,tracked,ghosts,camera_dx,camera_dy," +
                     "motion_confidence,active_tracks,new_tracks,removed_tracks," +
-                    "high_conf_matches,low_conf_recoveries,state,situation\n"
+                    "high_conf_matches,low_conf_recoveries,state,situation,frame_age_ms\n"
             )
             flush()
         }
@@ -114,7 +115,8 @@ class BenchmarkLogger(private val context: Context) {
                 stats.highConfidenceMatches,
                 stats.lowConfidenceRecoveries,
                 csv(m.state),
-                csv(m.situation)
+                csv(m.situation),
+                m.frameAgeMs
             ).joinToString(",")
         )
         w.newLine()

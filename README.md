@@ -62,6 +62,8 @@ Os datasets de imagens e anotações não estão incluídos. As pastas de result
 - Configurações de detecção, região de interesse, rastreamento e apresentação da interface.
 - Registro e compartilhamento de benchmarks: métricas por frame em `frames.csv` e resumo da sessão em `summary.txt`.
 
+As alterações experimentais de interpretação de veículos, faixa e sequência de verificação direcional estão descritas em [DOCUMENTACAO_MELHORIAS_TRAVESSIA.md](DOCUMENTACAO_MELHORIAS_TRAVESSIA.md). A [auditoria independente Astra](AUDITORIA_ASTRA_SENSEWALK.md) registra os builds, testes, correções e bloqueadores atuais. A direção/cobertura física da câmera ainda não é verificada: o aplicativo não conclui condições favoráveis com essa evidência ausente. Em instalação nova, o monitoramento automático fica ativado por padrão, sujeito a permissões e comando Parar; o consentimento inicia a sequência de travessia, enquanto os alertas já permanecem ativos durante o monitoramento.
+
 O logger de benchmark registra métricas numéricas, sem salvar os frames da câmera.
 
 Fonte experimental **USB / UVC** implementada separadamente do CameraX. HiCamera testada no aparelho com recepção RGB 640×360 e entrada na análise YOLO; estabilidade e demais cenários ainda precisam de validação. Veja [DOCUMENTACAO_CAMERA_USB.md](DOCUMENTACAO_CAMERA_USB.md).
@@ -147,7 +149,7 @@ O preview experimental não comprova latência, estabilidade, FPS nem segurança
 | `Dados_IA/dados_treinamento_ia/runs_sensewalk/yolov8m_baseline_640-3/weights/` | Modelo selecionado, último checkpoint e checkpoints periódicos do experimento. |
 | `Dados_IA/treinamento_sem_os_dataset/yolov8m.pt` e `yolov8s.pt` | Pesos base disponíveis para iniciar treinamentos. |
 
-**O novo `best.pt` ainda não foi integrado ao aplicativo.** O app carrega `model.tflite`; copiar ou renomear um arquivo `.pt` não converte o modelo para TensorFlow Lite.
+O app carrega `model.tflite`, não `best.pt`. O commit `e3ffdae` substituiu o asset por uma exportação compacta com 11 saídas de classe. O arquivo não contém metadados nominais das classes; a procedência/ordem precisa ser vinculada ao relatório de exportação e validada com imagens. Copiar ou renomear um `.pt` não o converte para TensorFlow Lite.
 
 Para atualizar o modelo do app, é necessário exportar o peso para um formato TensorFlow Lite compatível com o detector, conferir as classes e a estrutura dos tensores e validar a inferência no aparelho. O backup deve ser preservado durante essa atualização.
 
@@ -217,7 +219,7 @@ python .\Dados_IA\treinamento_sem_os_dataset\train_sensewalk_yolov8.py --help
 
 ## Compatibilidade entre o modelo e o aplicativo
 
-O arquivo `AppConfig.kt` define 9 classes para o aplicativo. O script `merge_sensewalk_dataset_v3.py` define 11 classes para o dataset V3:
+O arquivo `AppConfig.kt` e o script `merge_sensewalk_dataset_v3.py` definem estas 11 classes. A inspeção do asset confirmou saída `[1,15,8400]`, compatível com quatro coordenadas e 11 escores; a forma do tensor não comprova a ordem nominal:
 
 | ID | Configuração atual do Android | Preparação do dataset V3 |
 | --- | --- | --- |
@@ -225,12 +227,12 @@ O arquivo `AppConfig.kt` define 9 classes para o aplicativo. O script `merge_sen
 | 1 | `motorcycle` | `motorcycle` |
 | 2 | `bicycle` | `bicycle` |
 | 3 | `truck` | `truck` |
-| 4 | `ambulance` | `bus` |
+| 4 | `bus` | `bus` |
 | 5 | `traffic-light-green` | `traffic-light-green` |
 | 6 | `traffic-light-red` | `traffic-light-red` |
 | 7 | `traffic-light-yellow` | `traffic-light-yellow` |
 | 8 | `crosswalk` | `crosswalk` |
-| 9 | — | `pedestrian-light-green` |
-| 10 | — | `pedestrian-light-red` |
+| 9 | `pedestrian-light-green` | `pedestrian-light-green` |
+| 10 | `pedestrian-light-red` | `pedestrian-light-red` |
 
 Antes de integrar o novo modelo, confira os nomes e a ordem das classes efetivamente salvos no checkpoint, atualize o mapeamento e a lógica do app conforme necessário e valide o resultado. A lista do script de preparação, isoladamente, não confirma os metadados do arquivo `best.pt`.

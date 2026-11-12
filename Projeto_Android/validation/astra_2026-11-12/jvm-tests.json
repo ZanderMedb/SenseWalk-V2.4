@@ -1,0 +1,229 @@
+[
+  {
+    "suite": "com.travessia.segura.camera.LatestFrameDispatcherTest",
+    "tests": 2,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "blockedUiKeepsOneDeliveryAndReleasesEverySupersededFrame",
+      "stoppingDiscardsPendingFrameAndAllowsRestart"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.camera.UsbRgbCodecTest",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "unbounded resolution is rejected",
+      "RGB bytes produce opaque ARGB without swapping red and blue",
+      "incorrect frame size is rejected"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.camera.UsbVideoQualityTest",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "prefer compressed transport only when resolution matches",
+      "do not invent HD or select unbounded modes",
+      "prefer native HD over low resolution"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.camera.X5ProtocolTest",
+    "tests": 7,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "rejects response without x5 marker or valid rtsp",
+      "parses rtsp url from validated control response",
+      "accepts jpeg static RTP payload without rtpmap",
+      "accepts JPEG declared by rtpmap and rejects other codecs",
+      "declares all x5 lifecycle states",
+      "limits reconnect backoff",
+      "reports stale frames and x5 rotation deterministically"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.road.AndroidSafetyIntegrationTest",
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "automaticDefaultAndExplicitDisablePersistAcrossConfigInstances",
+      "completedInferenceDoesNotRefreshTheCaptureTimestamp",
+      "lateralDangerCannotBeFollowedByNoVehiclesMessage",
+      "hazardInferenceRunsBeforeConsentAndStopsWithMonitoring",
+      "oldFramesAndPreviousCameraGenerationCannotBeAccepted"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.road.AstraAuditFindingsTest",
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "monitoringCannotKeepFavorableAfterCoverageLoss",
+      "mismatchedSceneTimestampCannotCompleteWindow",
+      "monitoringExpiresLateralEvidenceEvenWithFreshFrontFrames",
+      "monitoringCannotReplaceVerifiedSignalAbsenceWithMissingDetection",
+      "missingOrientationCannotCompleteEvenTheFirstSide"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.road.AstraSafetyRegressionTest",
+    "tests": 11,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "pre button frames must not count toward a direction",
+      "vehicle signal alone does not establish an unsignalized crossing",
+      "green timer must reset across missing frames even if next color matches",
+      "small uncertain vehicle is not evidence of absence of conflict",
+      "moving lateral trajectory cannot be cleared by small box size",
+      "crosswalk confirmation needs spatial continuity not alternating stripes",
+      "no traffic light detection does not prove no applicable signal",
+      "brief occlusion is uncertainty even if visible list is empty",
+      "button never certifies physical direction and all three windows need coverage",
+      "approach at side must not be ignored just because outside central corridor",
+      "first frame after favorable must invalidate immediately on information loss"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.road.CrossingVerificationTest",
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "roadWithoutCrosswalkCannotBecomeFavorableEvenAfterThreeDirections",
+      "oldSidesAndRedSignalCannotProduceFavorableObservation",
+      "stationaryGrowthIsNotIndependentApproachButCentralObstacleIsDanger",
+      "distantVehicleOutsideCorridorDoesNotBlockButStaleFrameDoes",
+      "pedestrianLightRequiresAssociationAndGreenClockResetsOnLoss",
+      "crosswalkNeedsTwoSeparatedDetectionsAndVehicleSignalIsNotPedestrianSignal",
+      "crosswalkConfirmedAfterConsentUpgradesBeforeCheckingSides",
+      "uncertainVehicleInPathGetsPotentialAlertWithoutClaimingApproach",
+      "lateralVerificationNeedsButtonAndFreshDistinctSamples"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.road.RoadMonitoringTest",
+    "tests": 19,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "accepted yes without any new usable image times out without yolo",
+      "visible road alone never activates",
+      "pure road without sidewalk is not a crossing boundary",
+      "nonurban labels are inconclusive",
+      "lost road cancels pending confirmation",
+      "fresh image without road after yes does not start yolo",
+      "expired or stale yes cannot activate analysis",
+      "road and sidewalk boundary yields proportions not distance or confidence",
+      "no does not start analysis or repeat for same visible road",
+      "speech accepts only clear yes or no",
+      "quantization uses rgb value range and actual scale",
+      "persistent evidence activates but single frame does not",
+      "active analysis persists across loss and while yolo still sees hazards",
+      "road absence rearms after refusal",
+      "yes after voice prompt waits for a fresh image instead of rejecting old sample",
+      "old frame during listening does not reject pending question",
+      "error and stop require explicit restart",
+      "stale repeated or disconnected evidence never confirms",
+      "argmax uses unsigned logits and bilinear interpolation"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.tracking.OpticalFlowAuditTest",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "parkedExpansionWithMeasuredBackgroundTranslationIsUncertainNotApproaching",
+      "texturelessFramesCannotCertifyCameraCompensation",
+      "independentVehicleStartingLateralMotionSurvivesBackgroundCompensation"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.tracking.RastreadorAuditTest",
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "low fps is not stationary by invalid time window",
+      "gap cannot reuse old stationary history",
+      "independent lateral approach after stationary history is detected",
+      "failed compensation and abrupt turn yield uncertain then recover",
+      "parked growth with walking translation never proves independent approach"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.ui.MainLayoutContractTest",
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "crossingAndStopControlsExistInEveryMainLayout"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.voice.SpeechStateGateTest",
+    "tests": 8,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "unchanged conditions remain silent even after days",
+      "alignment must persist and oscillations restart settling",
+      "reset rearms only matching topics",
+      "silent observations rearm speech without announcing absence",
+      "only successful submission marks speech and stale completion is ignored",
+      "vehicle appearance and confirmed disappearance each rearm once",
+      "brief loss of approaching vehicle does not repeat warning",
+      "topics do not rearm each other"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.voice.VoiceMessageSchedulerTest",
+    "tests": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "new observation replaces obsolete queued state",
+      "safety removes stale directions but keeps new danger",
+      "reset removes only scene messages and preserves manual replies",
+      "full queue does not mark unsubmitted state as spoken",
+      "lower priority message is rejected when queue is full",
+      "safety alerts are emitted before informational messages"
+    ]
+  },
+  {
+    "suite": "com.travessia.segura.voice.VoiceSystemAuditTest",
+    "tests": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "cases": [
+      "dangerInterruptsFavorableAndDiscardsLowerPriorityQueue",
+      "consentQuestionMustNotCutAnActiveDangerWarning",
+      "statusCommandMustNotFlushAnActiveDangerWarning",
+      "invalidationMustStopFavorableAlreadySubmittedToTts",
+      "stateInterruptedBeforeCompletionCanBeAnnouncedAgain"
+    ]
+  }
+]

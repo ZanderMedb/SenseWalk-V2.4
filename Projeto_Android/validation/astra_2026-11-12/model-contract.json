@@ -1,0 +1,179 @@
+[
+  {
+    "file": "/home/zander_mb/SenseWalk-V2.4/Projeto_Android/app/src/main/assets/model.tflite",
+    "sha256": "b11df3830eb40b413fa1dea0a845c17f1d2af38ebc3fb1e599aff50c0ac4a8fd",
+    "description": "onnx2tf flatbuffer_direct (dynamic_range_quantized)",
+    "metadata_names": [],
+    "inputs": [
+      {
+        "name": "images",
+        "shape": [
+          1,
+          640,
+          640,
+          3
+        ],
+        "dtype": "<class 'numpy.float32'>",
+        "quantization": [
+          0.0,
+          0
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "output0",
+        "shape": [
+          1,
+          15,
+          8400
+        ],
+        "dtype": "<class 'numpy.float32'>",
+        "quantization": [
+          0.0,
+          0
+        ]
+      }
+    ],
+    "host_only": true,
+    "runs": {
+      "gray_synthetic": {
+        "finite": true,
+        "score_range": [
+          0.0,
+          1.4951466255297419e-05
+        ],
+        "bbox_range": [
+          -0.01275026798248291,
+          1.1242085695266724
+        ],
+        "raw_predictions_ge_020_before_nms_by_configured_class": {
+          "car": 0,
+          "motorcycle": 0,
+          "bicycle": 0,
+          "truck": 0,
+          "bus": 0,
+          "traffic-light-green": 0,
+          "traffic-light-red": 0,
+          "traffic-light-yellow": 0,
+          "crosswalk": 0,
+          "pedestrian-light-green": 0,
+          "pedestrian-light-red": 0
+        }
+      },
+      "Dados_IA/dados_treinamento_ia/runs/detect/runs_sensewalk/val_best_agnostic/val_batch0_labels.jpg": {
+        "finite": true,
+        "score_range": [
+          0.0,
+          0.7348683476448059
+        ],
+        "bbox_range": [
+          0.002535521984100342,
+          1.0449459552764893
+        ],
+        "raw_predictions_ge_020_before_nms_by_configured_class": {
+          "car": 45,
+          "motorcycle": 0,
+          "bicycle": 0,
+          "truck": 0,
+          "bus": 0,
+          "traffic-light-green": 0,
+          "traffic-light-red": 0,
+          "traffic-light-yellow": 0,
+          "crosswalk": 0,
+          "pedestrian-light-green": 0,
+          "pedestrian-light-red": 0
+        }
+      }
+    }
+  },
+  {
+    "file": "/home/zander_mb/SenseWalk-V2.4/Projeto_Android/app/src/main/assets/ffnet_122ns_lowres.tflite",
+    "sha256": "814ed92970669c0fe1f436e07733cdd41247cddc741c21657d51dadabfdff34f",
+    "description": "Qualcomm AI Hub Workbench aihub-2026.09.25.0.",
+    "metadata_names": [],
+    "inputs": [
+      {
+        "name": "image",
+        "shape": [
+          1,
+          512,
+          1024,
+          3
+        ],
+        "dtype": "<class 'numpy.uint8'>",
+        "quantization": [
+          0.003920366987586021,
+          0
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "mask",
+        "shape": [
+          1,
+          128,
+          256,
+          19
+        ],
+        "dtype": "<class 'numpy.uint8'>",
+        "quantization": [
+          0.20315125584602356,
+          153
+        ]
+      }
+    ],
+    "host_only": true,
+    "runs": {
+      "gray_synthetic": {
+        "finite": true,
+        "raw_mask_argmax_counts_including_padding": [
+          1265,
+          8,
+          30925,
+          0,
+          0,
+          0,
+          0,
+          0,
+          3,
+          0,
+          553,
+          3,
+          0,
+          0,
+          1,
+          5,
+          5,
+          0,
+          0
+        ]
+      },
+      "Dados_IA/dados_treinamento_ia/runs/detect/runs_sensewalk/val_best_agnostic/val_batch0_labels.jpg": {
+        "finite": true,
+        "raw_mask_argmax_counts_including_padding": [
+          119,
+          0,
+          32439,
+          0,
+          175,
+          15,
+          0,
+          2,
+          0,
+          0,
+          18,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  }
+]

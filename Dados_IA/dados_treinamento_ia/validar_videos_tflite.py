@@ -18,7 +18,7 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_MODEL = ROOT / "modelos_exportados" / "best_dynamic.tflite"
+DEFAULT_MODEL = ROOT.parents[1] / "Projeto_Android" / "app" / "src" / "main" / "assets" / "model.tflite"
 DEFAULT_OUTPUT = ROOT / "validacoes_videos"
 CLASS_NAMES = [
     "car",
@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--confidence", type=float, default=0.25)
     parser.add_argument("--iou", type=float, default=0.45)
     parser.add_argument("--stride", type=int, default=1, help="Processa um a cada N frames.")
+    parser.add_argument("--coordinates", choices=("normalized", "pixels"), default="normalized",
+                        help="Formato das boxes. O asset atual retorna coordenadas normalizadas.")
     return parser.parse_args()
 
 
@@ -83,6 +85,8 @@ def decode_detections(
     pad_h: float,
     confidence: float,
     iou: float,
+    input_size: int = 640,
+    coordinates: str = "normalized",
 ) -> list[tuple[int, float, int, int, int, int]]:
     predictions = output[0]
     if predictions.ndim != 2:
@@ -109,12 +113,14 @@ def decode_detections(
             continue
 
         center_x, center_y, width, height = prediction[:4]
+        if coordinates == "normalized":
+            center_x, center_y, width, height = prediction[:4] * input_size
         x1 = int((center_x - width / 2 - pad_w) / ratio)
         y1 = int((center_y - height / 2 - pad_h) / ratio)
         x2 = int((center_x + width / 2 - pad_w) / ratio)
         y2 = int((center_y + height / 2 - pad_h) / ratio)
-        x1, x2 = sorted((max(0, x1), min(frame_width - 1, x2)))
-        y1, y2 = sorted((max(0, y1), min(frame_height - 1, y2)))
+        x1, x2 = (max(0, min(frame_width - 1, x)) for x in (x1, x2))
+        y1, y2 = (max(0, min(frame_height - 1, y)) for y in (y1, y2))
         if x2 <= x1 or y2 <= y1:
             continue
         boxes_by_class.setdefault(class_id, []).append([x1, y1, x2 - x1, y2 - y1])
@@ -147,6 +153,7 @@ def process_video(
     confidence: float,
     iou: float,
     stride: int,
+    coordinates: str = "normalized",
 ) -> dict:
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
@@ -198,7 +205,8 @@ def process_video(
                     interpreter.invoke()
                     inference_seconds += time.perf_counter() - start
                     detections = decode_detections(
-                        interpreter.get_tensor(output_detail["index"]), width, height, ratio, pad_w, pad_h, confidence, iou
+                        interpreter.get_tensor(output_detail["index"]), width, height, ratio, pad_w, pad_h,
+                        confidence, iou, input_size, coordinates
                     )
                     processed_frames += 1
                     total_detections += len(detections)
@@ -263,9 +271,10 @@ def main() -> None:
     if len(input_shape) != 4 or input_shape[0] != 1 or input_shape[1] != input_shape[2] or input_shape[3] != 3:
         raise RuntimeError(f"Entrada do modelo incompativel: esperado [1, tamanho, tamanho, 3], recebido {input_shape}.")
 
-    result = process_video(video_path, interpreter, input_detail, output_detail, output_dir, args.confidence, args.iou, args.stride)
+    result = process_video(video_path, interpreter, input_detail, output_detail, output_dir, args.confidence, args.iou, args.stride, args.coordinates)
     result["validation_config"] = {
-        "model": str(model_path), "confidence": args.confidence, "iou": args.iou, "stride": args.stride, "input_shape": input_shape
+        "model": str(model_path), "confidence": args.confidence, "iou": args.iou, "stride": args.stride,
+        "input_shape": input_shape, "coordinates": args.coordinates
     }
     summary_path = output_dir / f"{video_path.stem}_resumo.json"
     summary_path.write_text(json.dumps(result, indent=2), encoding="utf-8")

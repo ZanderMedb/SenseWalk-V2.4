@@ -50,5 +50,6 @@ data class CinematicaResult(
     val vx: Float,
     val vy: Float,
     val emMovimento: Boolean,
-    val aproximando: Boolean
+    val aproximando: Boolean,
+    val valid: Boolean = false
 )

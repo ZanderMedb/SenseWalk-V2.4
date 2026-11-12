@@ -189,6 +189,16 @@
                     android:text="Carregando modelo..."
                     android:textColor="#DDE7F4FF"
                     android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/btnCrossing"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:background="@drawable/bg_button_primary"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFFFF"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <Button

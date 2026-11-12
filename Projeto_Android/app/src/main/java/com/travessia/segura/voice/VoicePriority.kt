@@ -12,7 +12,8 @@ data class ScheduledVoiceMessage(
     val priority: VoicePriority,
     val timestampMs: Long,
     val stateTopic: String? = null,
-    val stateValue: String? = null
+    val stateValue: String? = null,
+    val decisionElapsedMs: Long = 0L
 )
 
 /** Pequena fila determinística, separada do Android TTS para testes locais. */
@@ -43,4 +44,7 @@ class VoiceMessageScheduler(private val maxSize: Int = 3) {
     @Synchronized fun contains(key: String): Boolean = queue.any { it.key == key }
     @Synchronized fun remove(key: String) { queue.removeAll { it.key == key } }
     @Synchronized fun removePrefix(prefix: String) { queue.removeAll { it.key.startsWith(prefix) } }
+    @Synchronized fun dropBelow(priority: VoicePriority) { queue.removeAll { it.priority.weight < priority.weight } }
+    @Synchronized fun hasHigherPriorityThan(priority: VoicePriority): Boolean =
+        queue.any { it.priority.weight > priority.weight }
 }

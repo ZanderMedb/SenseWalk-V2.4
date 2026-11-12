@@ -1,0 +1,19 @@
+Using Python 3.12.16 environment at: /tmp/opencode/astra-audit/runtime
+Resolved 2 packages in 133ms
+Downloading opencv-python-headless (58.4MiB)
+ Downloaded opencv-python-headless
+Prepared 1 package in 729ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 111ms
+ + opencv-python-headless==5.0.0.93
+test_default_is_the_model_actually_loaded_by_android (test_validar_videos_tflite.VideoDecoderAuditTest.test_default_is_the_model_actually_loaded_by_android) ... ok
+test_normalized_crosswalk_is_unletterboxed_to_full_frame (test_validar_videos_tflite.VideoDecoderAuditTest.test_normalized_crosswalk_is_unletterboxed_to_full_frame) ... ok
+test_padding_only_box_is_not_sorted_back_into_image (test_validar_videos_tflite.VideoDecoderAuditTest.test_padding_only_box_is_not_sorted_back_into_image) ... ok
+test_pixel_contract_can_be_explicit (test_validar_videos_tflite.VideoDecoderAuditTest.test_pixel_contract_can_be_explicit) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

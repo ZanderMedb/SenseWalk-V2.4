@@ -1,0 +1,15 @@
+{
+  "Projeto_Android/app/build/outputs/apk/debug/app-debug.apk": {
+    "sha256": "e18971ba2fb80f241fbf7fe581ad0646255bb097f8855bb8db7612e7555bdbf6",
+    "size_bytes": 91897026,
+    "models": {
+      "assets/ffnet_122ns_lowres.tflite": "814ed92970669c0fe1f436e07733cdd41247cddc741c21657d51dadabfdff34f",
+      "assets/model.tflite": "b11df3830eb40b413fa1dea0a845c17f1d2af38ebc3fb1e599aff50c0ac4a8fd"
+    }
+  },
+  "Projeto_Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk": {
+    "sha256": "a2a37ab07fc3e7df9e96d4dc400bbb8750c2d588f234bdd97f1e913c2a272ffa",
+    "size_bytes": 367941,
+    "models": {}
+  }
+}
