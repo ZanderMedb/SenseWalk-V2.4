@@ -293,6 +293,8 @@ class AppConfig(context: Context) {
             "PARADO" -> tr("motion_stopped_short")
             "EM_MOVIMENTO" -> tr("motion_moving_short")
             "APROXIMANDO" -> tr("motion_approaching_short")
+            "POTENCIAL_CONFLITO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_potential")
+            "MOVIMENTO_INCERTO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_uncertain")
             else -> ""
         }
     }

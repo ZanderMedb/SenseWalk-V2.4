@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "reviewer": "Astra — inspeção visual de contact sheets e frames originais",
+  "source": "assistant_visual_review_not_independent_human_ground_truth",
+  "notes": "Somente os frames enumerados foram revisados. Não interpolar a presença nos intervalos. Classes de veículos, identidade e conflito físico não foram anotados. Revisão humana independente pendente.",
+  "intervals": [
+    {"video":"teste_01_faixa_veiculo", "class_name":"crosswalk", "presence":"present", "frames":[0,60,120,180,240,300,360,420,480,540,600,660,720,780,840,900], "notes":"Listras visíveis na pista; oclusão parcial por carro em algumas amostras."},
+    {"video":"teste_02_faixa_semaforo", "class_name":"crosswalk", "presence":"present", "frames":[0,60,120,180,240,300,360,420,480,540,600,660,720,840,900], "notes":"Listras visíveis nas amostras enumeradas; não extrapolar para o giro de câmera."},
+    {"video":"teste_02_faixa_semaforo", "class_name":"crosswalk", "presence":"unknown", "frames":[780], "notes":"Câmera girada ao longo da via; box cobre marcações triangulares. Possível falso positivo, não rotulado como ausência comprovada no frame inteiro."}
+  ],
+  "objects": [],
+  "risks": []
+}

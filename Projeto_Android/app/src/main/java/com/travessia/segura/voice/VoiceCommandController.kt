@@ -28,6 +28,8 @@ class VoiceCommandController(
         STATUS,
         SOURCE_PHONE,
         SOURCE_EXTERNAL,
+        SOURCE_USB,
+        CONFIRM_DIRECTION,
         SETTINGS,
         HELP,
         LANGUAGE_PT,
@@ -148,6 +150,11 @@ class VoiceCommandController(
     private fun parse(raw: String): Command {
         val text = normalize(raw)
 
+        // Stop takes precedence even when a language/source is mentioned in the same utterance.
+        if (containsAny(text, "parar", "pare", "stop", "detener", "deten")) return Command.STOP
+        // Negated requests must not start analysis from a substring match.
+        if (containsAny(text,"nao", "not", "no", "dont", "don t")) return Command.UNKNOWN
+
         // Idiomas - usados principalmente na tela inicial.
         if (containsAny(text, "portugues", "portuguese", "brasil", "brasileiro")) {
             return Command.LANGUAGE_PT
@@ -169,6 +176,8 @@ class VoiceCommandController(
         if (containsAny(text, "status", "estado", "situacao", "situation", "state", "estado actual", "situacion")) {
             return Command.STATUS
         }
+        if (containsAny(text,"camera posicionada", "camera ready", "camara lista")) return Command.CONFIRM_DIRECTION
+        if (containsAny(text,"usb", "uvc", "webcam")) return Command.SOURCE_USB
         if (containsAny(text, "camera do celular", "celular", "telefone", "phone camera", "phone", "mobile camera", "camara del celular", "telefono")) {
             return Command.SOURCE_PHONE
         }
@@ -195,7 +204,7 @@ class VoiceCommandController(
     }
 
     private fun containsAny(text: String, vararg terms: String): Boolean {
-        return terms.any { normalize(it) in text }
+        return terms.any { " ${normalize(it)} " in " $text " }
     }
 
     private fun localeTag(code: String): String {

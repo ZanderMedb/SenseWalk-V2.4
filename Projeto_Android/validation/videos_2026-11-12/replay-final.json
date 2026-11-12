@@ -1,0 +1,6 @@
+{
+  "frames": 626,
+  "videos": 2,
+  "runtime": "Robolectric native graphics; host tensors; no Android TFLite invocation",
+  "parity": "YOLO decode\/NMS first frame each video; FFNet first-frame score interpolation; ROI all frames"
+}

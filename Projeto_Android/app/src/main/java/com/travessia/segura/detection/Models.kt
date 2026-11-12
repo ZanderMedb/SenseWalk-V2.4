@@ -42,7 +42,8 @@ data class VeiculoInfo(
     val vel: Float,
     val bbox: FloatArray,
     val bboxW: Float,
-    val tid: Int
+    val tid: Int,
+    val trajectory: com.travessia.segura.tracking.ImageTrajectory? = null
 )
 
 data class CinematicaResult(

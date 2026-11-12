@@ -51,15 +51,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def letterbox(frame: np.ndarray, size: int) -> tuple[np.ndarray, float, float, float]:
+def letterbox(frame: np.ndarray, size: int, android: bool = False) -> tuple[np.ndarray, float, float, float]:
     height, width = frame.shape[:2]
     if height <= 0 or width <= 0:
         raise ValueError("Frame recebido sem dimensoes validas.")
-    ratio = min(size / width, size / height)
-    resized_w, resized_h = round(width * ratio), round(height * ratio)
+    ratio = float(min(np.float32(size) / width, np.float32(size) / height)) if android else min(size / width, size / height)
+    resized_w, resized_h = ((max(1, int(np.float32(width) * np.float32(ratio))),
+                             max(1, int(np.float32(height) * np.float32(ratio)))) if android
+                            else (round(width * ratio), round(height * ratio)))
     resized = cv2.resize(frame, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR)
     pad_w, pad_h = (size - resized_w) / 2, (size - resized_h) / 2
-    left, top = round(pad_w - 0.1), round(pad_h - 0.1)
+    # Canvas.drawBitmap(..., null Paint) snaps half-pixel translation upwards.
+    # Confirmed against production YoloDetector with Robolectric native Skia.
+    left, top = ((int(np.floor(pad_w + .5)), int(np.floor(pad_h + .5))) if android
+                 else (round(pad_w - 0.1), round(pad_h - 0.1)))
     padded = cv2.copyMakeBorder(
         resized,
         top,
@@ -87,6 +92,7 @@ def decode_detections(
     iou: float,
     input_size: int = 640,
     coordinates: str = "normalized",
+    android: bool = False,
 ) -> list[tuple[int, float, int, int, int, int]]:
     predictions = output[0]
     if predictions.ndim != 2:
@@ -115,6 +121,19 @@ def decode_detections(
         center_x, center_y, width, height = prediction[:4]
         if coordinates == "normalized":
             center_x, center_y, width, height = prediction[:4] * input_size
+        if android:
+            box = np.array([(center_x - width / 2 - pad_w) / ratio,
+                            (center_y - height / 2 - pad_h) / ratio,
+                            (center_x + width / 2 - pad_w) / ratio,
+                            (center_y + height / 2 - pad_h) / ratio], dtype=np.float32)
+            box[[0, 2]] = np.clip(box[[0, 2]], 0, frame_width)
+            box[[1, 3]] = np.clip(box[[1, 3]], 0, frame_height)
+            x1, y1, x2, y2 = map(float, box)
+            if x2 - x1 < 1 or y2 - y1 < 1:
+                continue
+            boxes_by_class.setdefault(class_id, []).append([x1, y1, x2 - x1, y2 - y1])
+            scores_by_class.setdefault(class_id, []).append(score)
+            continue
         x1 = int((center_x - width / 2 - pad_w) / ratio)
         y1 = int((center_y - height / 2 - pad_h) / ratio)
         x2 = int((center_x + width / 2 - pad_w) / ratio)
@@ -128,7 +147,22 @@ def decode_detections(
 
     detections = []
     for class_id, boxes in boxes_by_class.items():
-        indices = cv2.dnn.NMSBoxes(boxes, scores_by_class[class_id], confidence, iou)
+        if android:
+            # Android retains confidence == threshold and suppresses only IoU > threshold.
+            pending = sorted(range(len(boxes)), key=lambda i: -scores_by_class[class_id][i])
+            indices = []
+            while pending:
+                best = pending.pop(0)
+                indices.append(best)
+                a = boxes[best]
+                def overlap(index):
+                    b = boxes[index]
+                    intersection = max(0, min(a[0]+a[2], b[0]+b[2])-max(a[0], b[0])) * max(0, min(a[1]+a[3], b[1]+b[3])-max(a[1], b[1]))
+                    union = a[2]*a[3]+b[2]*b[3]-intersection
+                    return intersection / union if union > 0 else 0
+                pending = [i for i in pending if overlap(i) <= iou]
+        else:
+            indices = cv2.dnn.NMSBoxes(boxes, scores_by_class[class_id], confidence, iou)
         for index in np.asarray(indices).reshape(-1):
             index = int(index)
             x, y, width, height = boxes[index]
@@ -138,6 +172,7 @@ def decode_detections(
 
 def draw_detections(frame: np.ndarray, detections: list[tuple[int, float, int, int, int, int]]) -> None:
     for class_id, score, x1, y1, x2, y2 in detections:
+        x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
         color = (50, 220, 50) if "green" in CLASS_NAMES[class_id] else (40, 80, 240)
         label = f"{CLASS_NAMES[class_id]} {score:.0%}"
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)

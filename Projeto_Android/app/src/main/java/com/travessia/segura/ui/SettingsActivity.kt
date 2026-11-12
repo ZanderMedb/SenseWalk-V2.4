@@ -94,7 +94,7 @@ class SettingsActivity : AppCompatActivity() {
                 .setMessage(assets.open("ffnet_LICENSE.txt").bufferedReader().use { it.readText() })
                 .setPositiveButton(android.R.string.ok, null).show()
         }
-        addActionButton("USB / UVC — Licenses") {
+        addActionButton(roadText("usb_licenses")) {
             val names = assets.list("usb_licenses").orEmpty()
             androidx.appcompat.app.AlertDialog.Builder(this).setTitle("USB / UVC")
                 .setItems(names) { _, index ->
@@ -114,15 +114,15 @@ class SettingsActivity : AppCompatActivity() {
             config.mostrarPainelInferior = it
         }
 
-        addSection("X5 RTSP (EXPERIMENTAL)", "Conecte manualmente ao Wi-Fi da X5. Esta fonte não confirma segurança para travessia.")
-        addTextInput("SSID da X5", x5Config.ssid) { x5Config.ssid = it }
-        addTextInput("IP da X5", x5Config.controlHost) { x5Config.controlHost = it }
-        addTextInput("Porta de controle X5", x5Config.controlPort.toString()) {
+        addSection("X5 RTSP", roadText("x5_setup"))
+        addTextInput("X5 SSID", x5Config.ssid) { x5Config.ssid = it }
+        addTextInput("X5 IP", x5Config.controlHost) { x5Config.controlHost = it }
+        addTextInput(roadText("x5_port"), x5Config.controlPort.toString()) {
             it.toIntOrNull()?.let { port -> x5Config.controlPort = port }
         }
-        addTextInput("URL RTSP alternativa", x5Config.fallbackRtspUrl) { x5Config.fallbackRtspUrl = it }
-        addSwitch("Girar imagem X5 em 180°", x5Config.rotate180) { x5Config.rotate180 = it }
-        addTextInput("Limite de frame X5 (ms)", x5Config.staleFrameMs.toString()) {
+        addTextInput(roadText("x5_url"), x5Config.fallbackRtspUrl) { x5Config.fallbackRtspUrl = it }
+        addSwitch(roadText("x5_rotate"), x5Config.rotate180) { x5Config.rotate180 = it }
+        addTextInput(roadText("x5_age"), x5Config.staleFrameMs.toString()) {
             it.toLongOrNull()?.let { ms -> x5Config.staleFrameMs = ms }
         }
 
@@ -130,9 +130,7 @@ class SettingsActivity : AppCompatActivity() {
         addSliderFloat(tr("settings_confidence"), config.confMinima, 0.05f, 0.95f, 0.05f) {
             config.confMinima = it
         }
-        addSpinnerInt(tr("settings_inference_size"), config.inferenciaTamanho, listOf(160, 224, 320, 416, 640)) {
-            config.inferenciaTamanho = it
-        }
+        addSection(roadText("fixed_tensor"))
         addSliderInt(tr("settings_history"), config.historicoMax, 5, 60) {
             config.historicoMax = it
         }
@@ -182,9 +180,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         addSliderFloat(tr("settings_approaching_speed"), config.velAproximandoPxs, 10f, 80f, 1f) {
             config.velAproximandoPxs = it
-        }
-        addSliderFloat(tr("settings_proximity"), config.limiarProximoPct, 0.10f, 0.60f, 0.02f) {
-            config.limiarProximoPct = it
         }
 
         addSection(tr("settings_time_section"), tr("settings_time_subtitle"))

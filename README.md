@@ -66,6 +66,15 @@ As alterações experimentais de interpretação de veículos, faixa e sequênci
 
 O logger de benchmark registra métricas numéricas, sem salvar os frames da câmera.
 
+### Validação offline com vídeos reais (12/11/2026)
+
+Pipeline e reprodução: [`videos_teste/README.md`](videos_teste/README.md).
+Resultados e correções: [`RELATORIO_TESTES_VIDEOS_SENSEWALK.md`](RELATORIO_TESTES_VIDEOS_SENSEWALK.md).
+Pendências atuais: [`PENDENCIAS_SENSEWALK_FINALIZACAO.md`](PENDENCIAS_SENSEWALK_FINALIZACAO.md).
+Foram inferidas 626 amostras de dois MP4 com os assets reais e feito replay das classes
+Kotlin. Falhas importantes de faixa/veículos permanecem; não há aprovação de travessia
+nem validação física das câmeras/áudio a partir dessas gravações.
+
 Fonte experimental **USB / UVC** implementada separadamente do CameraX. HiCamera testada no aparelho com recepção RGB 640×360 e entrada na análise YOLO; estabilidade e demais cenários ainda precisam de validação. Veja [DOCUMENTACAO_CAMERA_USB.md](DOCUMENTACAO_CAMERA_USB.md).
 
 ## Como baixar o projeto

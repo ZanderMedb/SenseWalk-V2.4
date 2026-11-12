@@ -46,7 +46,7 @@ class OpticalFlowAuditTest {
             tracker.novoFrameCamera(motion.dx,motion.dy,motion.confidence,.35f)
             tracker.atualizar(1,20f+i+(i-6).coerceAtLeast(0)*4,60f,1.0+i*.1,20)
         }
-        assertEquals("APROXIMANDO",tracker.classificar(1,width,height).first)
+        assertEquals("POTENCIAL_CONFLITO",tracker.classificar(1,width,height).first)
     }
     @Test fun texturelessFramesCannotCertifyCameraCompensation() {
         val flow = SparseOpticalFlowEstimator()
@@ -54,5 +54,25 @@ class OpticalFlowAuditTest {
         flow.estimate(image)
         assertEquals(0f,flow.estimate(image).confidence,0f)
         image.recycle()
+    }
+
+    @Test fun rotatedAndZoomedBackgroundFramesRejectTranslationOnlyCompensation() {
+        for ((angle,scale) in listOf(2.0 to 1.0,0.0 to 1.04)) {
+            val flow = SparseOpticalFlowEstimator()
+            val original = frame(0)
+            flow.estimate(original)
+            val radians = Math.toRadians(angle)
+            val transformed = IntArray(width*height) { i ->
+                val x = (i%width-width/2.0)/scale; val y = (i/width-height/2.0)/scale
+                val sx = (kotlin.math.cos(radians)*x+kotlin.math.sin(radians)*y+width/2).toInt()
+                val sy = (-kotlin.math.sin(radians)*x+kotlin.math.cos(radians)*y+height/2).toInt()
+                if (sx in 0 until width && sy in 0 until height) texture[sy*width+sx] else 0xff000000.toInt()
+            }
+            val image = Bitmap.createBitmap(transformed,width,height,Bitmap.Config.ARGB_8888)
+            val motion = flow.estimate(image)
+            assertFalse("rotation=$angle scale=$scale estimate=$motion",motion.translationSupported)
+            assertEquals(0f,motion.confidence,0f)
+            original.recycle(); image.recycle()
+        }
     }
 }

@@ -12,8 +12,8 @@ import kotlin.math.min
  *
  * Para manter o projeto Android simples e sem uma biblioteca nativa extra, esta versão
  * usa block matching em uma malha de pontos de fundo e mediana robusta dos vetores.
- * O resultado é equivalente ao que precisamos do optical flow neste protótipo:
- * estimar a translação dominante entre dois frames consecutivos.
+ * A similaridade 2D diagnostica rotação/escala e rejeita compensação translacional
+ * incompatível; não aplica transformação 3D nem resolve paralaxe geral.
  *
  * Não tenta estimar rotação 3D da cabeça; isso fica para uma etapa futura com IMU ou
  * homografia. Mesmo assim, remove boa parte das pequenas tremidas horizontais/verticais.
@@ -29,7 +29,11 @@ class SparseOpticalFlowEstimator(
         val dy: Float = 0f,
         val confidence: Float = 0f,
         val validPoints: Int = 0,
-        val processingMs: Long = 0L
+        val processingMs: Long = 0L,
+        val rotationDegrees: Float = 0f,
+        val scale: Float = 1f,
+        val backgroundResidual: Float = Float.POSITIVE_INFINITY,
+        val translationSupported: Boolean = false
     ) {
         val magnitude: Float get() = hypot(dx, dy)
     }
@@ -124,14 +128,23 @@ class SparseOpticalFlowEstimator(
         val rotated = rotateVector(rawDx, rawDy, rotationDegrees)
         val inlierRatio = inliers.size.toFloat() / vectorsX.size.toFloat()
         val pointFactor = min(1f, vectorsX.size / 14f)
-        val confidence = (inlierRatio * pointFactor * if (covered >= 3) 1f else 0f).coerceIn(0f, 1f)
+        val fit = BackgroundSimilarity.fit(origins.indices.map { i ->
+            BackgroundSimilarity.Match(origins[i].first.toFloat(),origins[i].second.toFloat(),
+                vectorsX[i].toFloat(),vectorsY[i].toFloat())
+        }, sampled.width, sampled.height)
+        val translationSupported = fit?.translationSupported == true
+        val confidence = (inlierRatio * pointFactor * if (covered >= 3 && translationSupported) 1f else 0f).coerceIn(0f, 1f)
 
         return MotionEstimate(
             dx = rotated.first,
             dy = rotated.second,
             confidence = confidence,
             validPoints = vectorsX.size,
-            processingMs = elapsedMs(started)
+            processingMs = elapsedMs(started),
+            rotationDegrees = fit?.rotationDegrees ?: 0f,
+            scale = fit?.scale ?: 1f,
+            backgroundResidual = fit?.residual ?: Float.POSITIVE_INFINITY,
+            translationSupported = translationSupported
         )
     }
 

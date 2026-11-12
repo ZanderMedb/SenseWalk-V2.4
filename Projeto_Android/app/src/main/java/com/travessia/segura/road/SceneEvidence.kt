@@ -8,7 +8,9 @@ enum class SignalApplicability { PEDESTRIAN_GREEN, PEDESTRIAN_RED, VEHICLE_ONLY,
     NOT_APPLICABLE_CONFIRMED }
 
 data class SceneEvidence(val crosswalk: CrosswalkStatus, val crosswalkBox: RawDetection?,
-    val signal: SignalApplicability, val timestampMs: Long, val greenObservedAtMs: Long = -1L)
+    val signal: SignalApplicability, val timestampMs: Long, val greenObservedAtMs: Long = -1L,
+    /** Independent association evidence. Image proximity alone does not establish applicability. */
+    val signalAssociationVerified: Boolean = false)
 
 /** Só YOLO confirma a faixa; ausência de detecção nunca comprova ausência de faixa/sinal. */
 class SceneEvidenceTracker {
@@ -40,7 +42,8 @@ class SceneEvidenceTracker {
             crosswalkBox = crossing
         }
         if (nowMs - lastCrosswalk !in 0..850) { firstCrosswalk = -1L; crosswalkBox = null; hits = 0 }
-        val confirmed = firstCrosswalk >= 0 && hits >= 2 && nowMs - firstCrosswalk >= 400 && crosswalkBox != null
+        // Hold can retain a previously confirmed stripe, never mature two brief hits by a timer.
+        val confirmed = firstCrosswalk >= 0 && hits >= 2 && lastCrosswalk - firstCrosswalk >= 400 && crosswalkBox != null
         val signalCandidates = detections.filter { it.className.startsWith("pedestrian-light-") }
         // O tipo visual é necessário, mas a correspondência geométrica é só um indício.
         val associated = signalCandidates.filter { det ->

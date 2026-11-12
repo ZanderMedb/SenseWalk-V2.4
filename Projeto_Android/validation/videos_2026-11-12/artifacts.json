@@ -1,0 +1,29 @@
+{
+  "apks": [
+    {
+      "path": "Projeto_Android/app/build/outputs/apk/debug/app-debug.apk",
+      "bytes": 91897026,
+      "sha256": "1efc7cc54624a7a3550ce56a693425ea084665350f2cb2f72be41e983f489e5f"
+    },
+    {
+      "path": "Projeto_Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+      "bytes": 367941,
+      "sha256": "a2a37ab07fc3e7df9e96d4dc400bbb8750c2d588f234bdd97f1e913c2a272ffa"
+    }
+  ],
+  "models": [
+    {
+      "name": "model.tflite",
+      "source_sha256": "b11df3830eb40b413fa1dea0a845c17f1d2af38ebc3fb1e599aff50c0ac4a8fd",
+      "apk_sha256": "b11df3830eb40b413fa1dea0a845c17f1d2af38ebc3fb1e599aff50c0ac4a8fd"
+    },
+    {
+      "name": "ffnet_122ns_lowres.tflite",
+      "source_sha256": "814ed92970669c0fe1f436e07733cdd41247cddc741c21657d51dadabfdff34f",
+      "apk_sha256": "814ed92970669c0fe1f436e07733cdd41247cddc741c21657d51dadabfdff34f"
+    }
+  ],
+  "lint": {
+    "Warning": 145
+  }
+}

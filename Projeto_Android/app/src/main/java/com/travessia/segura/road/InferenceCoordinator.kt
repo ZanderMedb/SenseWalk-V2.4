@@ -80,7 +80,8 @@ class InferenceCoordinator(
             yolos++; yoloMs = SystemClock.elapsedRealtime() - yoloStarted
         } else dropped++
         if (!acceptsResult(token,capturedAtMs)) return
-        if (running && config.automaticRoadDetection && !failure && machine.state != AnalysisState.AWAITING_CONFIRMATION) {
+        if ((manual() || (running && config.automaticRoadDetection)) && !failure &&
+            (manual() || machine.state != AnalysisState.AWAITING_CONFIRMATION)) {
             if (machine.state == AnalysisState.STOPPED) {
                 machine = AutomaticDetectionManager(config.roadConfirmationMs.toLong(), config.roadHoldMs.toLong(), config.roadCooldownMs.toLong())
                 machine.start()
@@ -100,7 +101,7 @@ class InferenceCoordinator(
                     segments++; segMs = engine.lastInferenceMs
                     val finished = SystemClock.elapsedRealtime()
                     lastSegmentationCostMs = finished - segmentationStarted
-                    if (!running || token != resultToken) return
+                    if ((!manual() && !running) || token != resultToken) return
                     if (finished - capturedAtMs > 1500) {
                         dropped++
                         lastRoadResult = null
@@ -111,7 +112,7 @@ class InferenceCoordinator(
                     }
                     val result = RoadSceneAnalyzer.analyze(labels, 256, 128, capturedAtMs)
                     lastRoadResult = result
-                    val state = machine.update(result, finished)
+                    val state = if (manual()) AnalysisState.ACTIVE_ANALYSIS else machine.update(result, finished)
                     val seconds = ((finished - epoch) / 1000f).coerceAtLeast(1f)
                     val wanted = state == AnalysisState.ACTIVE_ANALYSIS
                     if (wanted != automaticYolo) {

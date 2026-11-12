@@ -44,7 +44,7 @@ class UsbCameraClient(private val context: Context, private val onFrame: (VideoF
                     val pixels = UsbRgbCodec.toArgb(frame.rgb,frame.width,frame.height)
                     val bitmap = Bitmap.createBitmap(pixels,frame.width,frame.height,Bitmap.Config.ARGB_8888)
                     if (running) onFrame(VideoFrame(bitmap,frame.timestamp,0)) else bitmap.recycle()
-                } catch (error: Exception) { notify("USB: erro no frame de vídeo",true); Log.e("UsbCamera", "Frame",error) }
+                } catch (error: Exception) { notifyKey("usb_frame",true); Log.e("UsbCamera", "Frame",error) }
             }
         }
         try {
@@ -64,7 +64,7 @@ class UsbCameraClient(private val context: Context, private val onFrame: (VideoF
                     if (chosen != null) camera.setPreviewSize(chosen)
                     val size = chosen ?: camera.previewSize
                     if (size == null || size.width !in 1..4096 || size.height !in 1..2160) {
-                        notify("USB: resolução não suportada",true); return
+                        notifyKey("usb_resolution",true); return
                     }
                     width = size.width; height = size.height
                     camera.setFrameCallback({ buffer ->
@@ -83,7 +83,7 @@ class UsbCameraClient(private val context: Context, private val onFrame: (VideoF
                                 channel.trySend(RgbFrame(bytes,w,h,timestamp))
                             } else if (!loggedSizeMismatch) {
                                 loggedSizeMismatch = true
-                                notify("USB: formato de frame incompatível com a resolução negociada",true)
+                                notifyKey("usb_format",true)
                                 Log.e("UsbCamera", "RGB bytes=${source.remaining()} expected=${w*h*3}")
                             }
                         }
@@ -92,31 +92,33 @@ class UsbCameraClient(private val context: Context, private val onFrame: (VideoF
                     notify("USB: ${device.productName ?: "UVC"} — ${width}×${height}",false)
                     Log.i("UsbCamera", "Opened ${device.vendorId}:${device.productId} ${width}x${height}")
                 }
-                override fun onCameraClose(device: UsbDevice) { notify("USB: câmera fechada",true) }
+                override fun onCameraClose(device: UsbDevice) { notifyKey("usb_closed",true) }
                 override fun onDeviceClose(device: UsbDevice) { selected = null }
                 override fun onDetach(device: UsbDevice) {
-                    if (selected == device.deviceName) { selected = null; notify("USB: webcam desconectada",true) }
+                    if (selected == device.deviceName) { selected = null; notifyKey("usb_disconnected",true) }
                 }
-                override fun onCancel(device: UsbDevice) { selected = null; notify("USB: permissão não concedida",true) }
+                override fun onCancel(device: UsbDevice) { selected = null; notifyKey("usb_permission_denied",true) }
                 override fun onError(device: UsbDevice, error: CameraException) {
-                    selected = null; notify("USB: não foi possível abrir. Feche outros apps de câmera USB e reconecte.",true)
+                    selected = null; notifyKey("usb_open_error",true)
                     Log.e("UsbCamera", "Open failed",error)
                 }
             })
             val manager = context.getSystemService(UsbManager::class.java)
             val device = manager.deviceList.values.firstOrNull(::isVideo)
-            if (device != null) select(device) else notify("USB: conecte uma webcam UVC por adaptador OTG",false)
-        } catch (error: Exception) { notify("USB: erro ao inicializar captura",true); Log.e("UsbCamera","Initialize",error) }
-        catch (error: LinkageError) { notify("USB: biblioteca nativa indisponível",true); Log.e("UsbCamera","Native",error) }
+            if (device != null) select(device) else notifyKey("usb_connect",false)
+        } catch (error: Exception) { notifyKey("usb_initialize",true); Log.e("UsbCamera","Initialize",error) }
+        catch (error: LinkageError) { notifyKey("usb_native",true); Log.e("UsbCamera","Native",error) }
     }
     private fun isVideo(device: UsbDevice): Boolean = (0 until device.interfaceCount).any { device.getInterface(it).interfaceClass == 14 }
     private fun select(device: UsbDevice) {
         if (!running || selected != null || !isVideo(device)) return
         selected = device.deviceName
-        notify("USB: autorize o SenseWalk a acessar a webcam",false)
+        notifyKey("usb_permission",false)
         helper?.selectDevice(device)
     }
     private fun notify(message: String, error: Boolean) { if (running) onStatus(message,error) }
+    private fun notifyKey(key: String, error: Boolean) = notify(com.travessia.segura.road.RoadText.get(
+        com.travessia.segura.config.LanguageManager.currentLanguage(context),key),error)
     override fun close() {
         running = false
         frames?.cancel(); frames = null

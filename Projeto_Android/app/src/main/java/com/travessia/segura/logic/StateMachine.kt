@@ -28,7 +28,6 @@ class StateMachine(
         private const val TAG = "StateMachine"
         // Confirma persistência da observação; não comprova segurança da via.
         private const val TEMPO_CONFIRMAR_LIVRE_S = 3.0
-        private const val TEMPO_CONFIRMAR_PARADO_S = 3.0
     }
 
     var estado = EST_INATIVO
@@ -262,7 +261,7 @@ class StateMachine(
         }
 
         // Tem carros em movimento
-        val temMovimento = veiculosReais.values.any { it.classif == "APROXIMANDO" || it.classif == "EM_MOVIMENTO" } || nSemId > 0
+        val temMovimento = veiculosReais.values.any { it.classif in setOf("APROXIMANDO","POTENCIAL_CONFLITO","EM_MOVIMENTO") } || nSemId > 0
         if (temMovimento) {
             tViaLimpa = null
             situacaoAtual = "AGUARDE"
@@ -276,7 +275,7 @@ class StateMachine(
         }
         if (todosParados) {
             iniciarConfirmacao("stopped",agora)
-            if (agora - tViaLimpa!! >= TEMPO_CONFIRMAR_PARADO_S) {
+            if (agora - tViaLimpa!! >= config.tempoParadoSeguro.coerceIn(1f,10f)) {
                  situacaoAtual = "VERIFICANDO"
                 anunciarTransito("stopped",config.tr("voice_road_vehicles_stopped"))
             } else {
@@ -425,7 +424,7 @@ class StateMachine(
             return
         }
 
-        val temMovimento = veiculosReais.values.any { it.classif == "APROXIMANDO" || it.classif == "EM_MOVIMENTO" } || nSemId > 0
+        val temMovimento = veiculosReais.values.any { it.classif in setOf("APROXIMANDO","POTENCIAL_CONFLITO","EM_MOVIMENTO") } || nSemId > 0
 
         if (temMovimento) {
             // Carro em movimento — resetar, não pode passar
@@ -443,7 +442,7 @@ class StateMachine(
             if (todosParados) {
                 iniciarConfirmacao("stopped",agora)
                 val tempoParado = agora - tViaLimpa!!
-                if (tempoParado >= TEMPO_CONFIRMAR_PARADO_S) {
+                if (tempoParado >= config.tempoParadoSeguro.coerceIn(1f,10f)) {
                      situacaoAtual = "VERIFICANDO"
                     anunciarTransito("stopped",msgPodePassar)
                 } else {

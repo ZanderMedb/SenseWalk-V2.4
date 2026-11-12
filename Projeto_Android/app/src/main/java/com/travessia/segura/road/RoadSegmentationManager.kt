@@ -27,6 +27,7 @@ class RoadSegmentationManager(context: Context) : AutoCloseable {
     private val output = ByteBuffer.allocateDirect(128 * 256 * 19).order(ByteOrder.nativeOrder())
     private val scale: Float
     private val zeroPoint: Int
+    private val quantizedChannels: ByteArray
     var lastInferenceMs = 0L; private set
     init {
         val i = interpreter.getInputTensor(0); val o = interpreter.getOutputTensor(0)
@@ -34,6 +35,7 @@ class RoadSegmentationManager(context: Context) : AutoCloseable {
         require(o.shape().contentEquals(intArrayOf(1,128,256,19)) && o.dataType() == DataType.UINT8)
         scale = i.quantizationParams().scale; zeroPoint = i.quantizationParams().zeroPoint
         require(scale > 0 && o.quantizationParams().scale > 0)
+        quantizedChannels = RoadTensorCodec.quantizationTable(scale,zeroPoint)
     }
     @Synchronized fun segment(bitmap: Bitmap): ByteArray {
         // Resize-pad do app oficial. A máscara é desacolchoada abaixo antes de analisar ROI/desenhar.
@@ -47,7 +49,7 @@ class RoadSegmentationManager(context: Context) : AutoCloseable {
         input.rewind()
         for (pixel in pixels) for (channel in 0..2) {
             val shift = 16 - channel * 8
-            input.put(RoadTensorCodec.quantize(pixel ushr shift and 255, scale, zeroPoint).toByte())
+            input.put(quantizedChannels[pixel ushr shift and 255])
         }
         input.rewind(); output.rewind()
         val inferenceStarted = android.os.SystemClock.elapsedRealtime()

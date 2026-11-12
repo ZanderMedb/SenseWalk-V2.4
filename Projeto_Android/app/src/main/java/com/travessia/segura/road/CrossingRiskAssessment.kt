@@ -3,7 +3,8 @@ package com.travessia.segura.road
 import com.travessia.segura.detection.VeiculoInfo
 
 enum class RiskReason { CONFLICTING_APPROACH, POTENTIAL_TRAFFIC_CONFLICT, CROSSWALK_OCCUPIED, OBSTACLE_AHEAD, MOTION_UNCERTAIN, TRACK_LOST, SIGNAL_UNCERTAIN, STALE_IMAGE }
-data class SceneConfidence(val visualCurrent: Boolean, val motionReliable: Boolean, val coverageVerified: Boolean)
+data class SceneConfidence(val visualCurrent: Boolean, val motionReliable: Boolean, val coverageVerified: Boolean,
+    val frameAgeMs: Long = 0)
 data class VehicleMotionAssessment(val trackId: Int, val classification: String, val inCorridor: Boolean,
     val obstacle: Boolean, val conflicting: Boolean)
 data class CrossingRiskAssessment(val reasons: Set<RiskReason>, val vehicles: List<VehicleMotionAssessment>,
@@ -33,18 +34,21 @@ object CrossingRiskAnalyzer {
             // A câmera lateral não tem o mesmo corredor central da vista frontal.
             // Fora da caixa da faixa não equivale a fora de uma trajetória futura.
             val conflict = v.classif == "APROXIMANDO"
+            val projectedConflict = crosswalk != null && v.trajectory?.mayIntersect(b,
+                floatArrayOf(crosswalk.x1,crosswalk.y1,crosswalk.x2,crosswalk.y2)) == true && v.classif != "PARADO"
+            if (v.classif == "POTENCIAL_CONFLITO" || projectedConflict) reasons += RiskReason.POTENTIAL_TRAFFIC_CONFLICT
             if (occupied) reasons += RiskReason.CROSSWALK_OCCUPIED
             if (obstacle) reasons += RiskReason.OBSTACLE_AHEAD
             if (conflict) reasons += RiskReason.CONFLICTING_APPROACH
             if (corridor && v.classif == "MOVIMENTO_INCERTO" &&
                 v.bboxW / w >= .12f && b[3] / h >= .65f && !obstacle && !occupied)
                 reasons += RiskReason.POTENTIAL_TRAFFIC_CONFLICT
-            if (v.classif == "MOVIMENTO_INCERTO" || v.classif == "EM_MOVIMENTO")
+            if (v.classif == "MOVIMENTO_INCERTO" || v.classif == "EM_MOVIMENTO" || v.classif == "POTENCIAL_CONFLITO")
                 reasons += RiskReason.MOTION_UNCERTAIN
             VehicleMotionAssessment(v.tid, v.classif, corridor, obstacle, conflict)
         }
         return CrossingRiskAssessment(reasons, assessed,
             SceneConfidence(frameAgeMs in 0..1500, cameraReliable && RiskReason.MOTION_UNCERTAIN !in reasons,
-                coverageVerified))
+                coverageVerified, frameAgeMs))
     }
 }

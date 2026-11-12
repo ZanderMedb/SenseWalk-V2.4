@@ -1,0 +1,9 @@
+test_default_is_the_model_actually_loaded_by_android (test_validar_videos_tflite.VideoDecoderAuditTest.test_default_is_the_model_actually_loaded_by_android) ... ok
+test_normalized_crosswalk_is_unletterboxed_to_full_frame (test_validar_videos_tflite.VideoDecoderAuditTest.test_normalized_crosswalk_is_unletterboxed_to_full_frame) ... ok
+test_padding_only_box_is_not_sorted_back_into_image (test_validar_videos_tflite.VideoDecoderAuditTest.test_padding_only_box_is_not_sorted_back_into_image) ... ok
+test_pixel_contract_can_be_explicit (test_validar_videos_tflite.VideoDecoderAuditTest.test_pixel_contract_can_be_explicit) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

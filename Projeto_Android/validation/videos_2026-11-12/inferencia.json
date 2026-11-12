@@ -1,0 +1,208 @@
+{
+  "videos": [
+    {
+      "video": "/home/zander_mb/SenseWalk-V2.4/videos_teste/teste_01_faixa_veiculo.mp4",
+      "metadata": {
+        "width": 854,
+        "height": 480,
+        "fps": 30.008892721442237,
+        "reported_frames": 928,
+        "duration_s": 30.924166666666668,
+        "orientation_degrees": 0.0,
+        "sha256": "4d4a580bd615d725413d92f7192f1dd28ea667ea58c176ce3437f12598a9ead8"
+      },
+      "frames_decoded": 928,
+      "processed_frames": 310,
+      "decode_count_matches": true,
+      "timestamp_fallbacks": 0,
+      "detections_by_class": {
+        "pedestrian-light-green": 239,
+        "car": 41,
+        "pedestrian-light-red": 260
+      },
+      "crosswalk_detected_frames": 0,
+      "road_detected_frames": 310,
+      "sidewalk_detected_frames": 110,
+      "boundary_frames": 110,
+      "no_crosswalk_detection_intervals": [
+        [
+          0.0,
+          30.890833333333333
+        ]
+      ],
+      "intervals_note": "Candidates for review; NOT confirmed failures without visibility annotations.",
+      "latency_host_ms": {
+        "yolo": {
+          "p50": 31.283122500099125,
+          "p95": 32.77500249987497
+        },
+        "ffnet": {
+          "p50": 51.44891499912774,
+          "p95": 53.62415435083676
+        },
+        "pipeline": {
+          "p50": 100.97587800009933,
+          "p95": 105.74999185027991
+        }
+      },
+      "annotations": {
+        "annotated_samples": 0,
+        "tp_presence": 0,
+        "fn_presence": 0,
+        "fp_presence": 0,
+        "tn_presence": 0,
+        "presence_recall": null,
+        "absent_frame_false_positive_rate": null,
+        "note": "Frame presence, not box IoU/object recall or safety accuracy."
+      }
+    },
+    {
+      "video": "/home/zander_mb/SenseWalk-V2.4/videos_teste/teste_02_faixa_semaforo.mp4",
+      "metadata": {
+        "width": 854,
+        "height": 480,
+        "fps": 29.994958653222138,
+        "reported_frames": 948,
+        "duration_s": 31.60531111111111,
+        "orientation_degrees": 0.0,
+        "sha256": "4c9f5954bf2023504f19b8d500f5ec187344d88dce02e131c9ed43a57c1fa506"
+      },
+      "frames_decoded": 948,
+      "processed_frames": 316,
+      "decode_count_matches": true,
+      "timestamp_fallbacks": 0,
+      "detections_by_class": {
+        "pedestrian-light-red": 199,
+        "car": 202,
+        "pedestrian-light-green": 61,
+        "traffic-light-green": 92,
+        "crosswalk": 18
+      },
+      "crosswalk_detected_frames": 18,
+      "road_detected_frames": 316,
+      "sidewalk_detected_frames": 153,
+      "boundary_frames": 153,
+      "no_crosswalk_detection_intervals": [
+        [
+          0.0,
+          25.10428888888889
+        ],
+        [
+          25.604355555555557,
+          25.70438888888889
+        ],
+        [
+          27.10461111111111,
+          27.304644444444445
+        ],
+        [
+          27.50467777777778,
+          31.505266666666667
+        ]
+      ],
+      "intervals_note": "Candidates for review; NOT confirmed failures without visibility annotations.",
+      "latency_host_ms": {
+        "yolo": {
+          "p50": 30.981462999989162,
+          "p95": 32.21872574977169
+        },
+        "ffnet": {
+          "p50": 51.85625499871094,
+          "p95": 54.69303225163458
+        },
+        "pipeline": {
+          "p50": 100.87785949872341,
+          "p95": 105.89821499979735
+        }
+      },
+      "annotations": {
+        "annotated_samples": 0,
+        "tp_presence": 0,
+        "fn_presence": 0,
+        "fp_presence": 0,
+        "tn_presence": 0,
+        "presence_recall": null,
+        "absent_frame_false_positive_rate": null,
+        "note": "Frame presence, not box IoU/object recall or safety accuracy."
+      }
+    }
+  ],
+  "errors": [],
+  "stride": 3,
+  "confidence": 0.2,
+  "nms": 0.45,
+  "python": "3.12.16",
+  "opencv": "5.0.0",
+  "numpy": "2.5.4",
+  "nominal_classes": [
+    "car",
+    "motorcycle",
+    "bicycle",
+    "truck",
+    "bus",
+    "traffic-light-green",
+    "traffic-light-red",
+    "traffic-light-yellow",
+    "crosswalk",
+    "pedestrian-light-green",
+    "pedestrian-light-red"
+  ],
+  "class_provenance": "AppConfig + dataset V3; no nominal metadata in YOLO asset",
+  "limitations": [
+    "Host inference, not Android runtime",
+    "OpenCV vs Skia pixel interpolation not certified",
+    "No physical coverage or signal applicability",
+    "No risk ground truth"
+  ],
+  "models": {
+    "yolo": {
+      "sha256": "b11df3830eb40b413fa1dea0a845c17f1d2af38ebc3fb1e599aff50c0ac4a8fd",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "output": [
+        1,
+        15,
+        8400
+      ],
+      "input_dtype": "<class 'numpy.float32'>",
+      "output_dtype": "<class 'numpy.float32'>",
+      "input_quantization": [
+        0.0,
+        0
+      ],
+      "output_quantization": [
+        0.0,
+        0
+      ]
+    },
+    "ffnet": {
+      "sha256": "814ed92970669c0fe1f436e07733cdd41247cddc741c21657d51dadabfdff34f",
+      "input": [
+        1,
+        512,
+        1024,
+        3
+      ],
+      "output": [
+        1,
+        128,
+        256,
+        19
+      ],
+      "input_dtype": "<class 'numpy.uint8'>",
+      "output_dtype": "<class 'numpy.uint8'>",
+      "input_quantization": [
+        0.003920366987586021,
+        0
+      ],
+      "output_quantization": [
+        0.20315125584602356,
+        153
+      ]
+    }
+  }
+}

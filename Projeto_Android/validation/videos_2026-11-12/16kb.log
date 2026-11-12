@@ -1,0 +1,17 @@
+OK lib/arm64-v8a/libUVCCamera.so
+OK lib/arm64-v8a/libimage_processing_util_jni.so
+OK lib/arm64-v8a/libjpeg-turbo212.so
+OK lib/arm64-v8a/libsurface_util_jni.so
+OK lib/arm64-v8a/libtensorflowlite_jni.so
+OK lib/arm64-v8a/libusb1.0.so
+OK lib/arm64-v8a/libuvc.so
+OK lib/arm64-v8a/libyuv.so
+OK lib/x86_64/libUVCCamera.so
+OK lib/x86_64/libimage_processing_util_jni.so
+OK lib/x86_64/libjpeg-turbo212.so
+OK lib/x86_64/libsurface_util_jni.so
+OK lib/x86_64/libtensorflowlite_jni.so
+OK lib/x86_64/libusb1.0.so
+OK lib/x86_64/libuvc.so
+OK lib/x86_64/libyuv.so
+Verificadas 16 bibliotecas de 64 bits: LOAD, RELRO e ZIP compatíveis com 16 KB.

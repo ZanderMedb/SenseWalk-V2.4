@@ -1,0 +1,11 @@
+test_android_fractional_geometry_and_inclusive_threshold (test_offline_video_validation.OfflineValidationTest.test_android_fractional_geometry_and_inclusive_threshold) ... ok
+test_conflicting_annotations_fail (test_offline_video_validation.OfflineValidationTest.test_conflicting_annotations_fail) ... ok
+test_ffnet_interpolates_scores_before_argmax (test_offline_video_validation.OfflineValidationTest.test_ffnet_interpolates_scores_before_argmax) ... ok
+test_quantization_rgb_order_and_padding (test_offline_video_validation.OfflineValidationTest.test_quantization_rgb_order_and_padding) ... ok
+test_road_only_is_not_boundary (test_offline_video_validation.OfflineValidationTest.test_road_only_is_not_boundary) ... ok
+test_unknown_and_unreviewed_frames_are_not_false_negatives (test_offline_video_validation.OfflineValidationTest.test_unknown_and_unreviewed_frames_are_not_false_negatives) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.052s
+
+OK

@@ -5,6 +5,8 @@ import kotlin.math.floor
 import kotlin.math.roundToInt
 
 object RoadTensorCodec {
+    fun quantizationTable(scale: Float, zeroPoint: Int): ByteArray =
+        ByteArray(256) { quantize(it,scale,zeroPoint).toByte() }
     fun quantize(channel: Int, scale: Float, zeroPoint: Int): Int =
         (channel / 255f / scale).roundToInt().plus(zeroPoint).coerceIn(0,255)
 

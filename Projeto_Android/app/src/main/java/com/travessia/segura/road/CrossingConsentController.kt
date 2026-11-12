@@ -17,7 +17,7 @@ import com.travessia.segura.voice.VoiceSystem
 
 /** Uma resposta por pergunta. Sem resposta inequívoca, nunca consentir. */
 class CrossingConsentController(private val activity: AppCompatActivity, private val voice: VoiceSystem,
-    private val language: () -> String) {
+    private val language: () -> String, private val onStop: () -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
     private var dialog: AlertDialog? = null
@@ -37,6 +37,7 @@ class CrossingConsentController(private val activity: AppCompatActivity, private
         dialog = AlertDialog.Builder(activity).setTitle(text("AWAITING_CONFIRMATION"))
             .setPositiveButton(text("yes")) { _, _ -> finish(true, "consent_yes") }
             .setNegativeButton(text("no")) { _, _ -> finish(false, "declined") }
+            .setNeutralButton(text("stop")) { _, _ -> stop() }
             .setOnCancelListener { finish(false, "declined") }.show()
         handler.postDelayed(timeout, 24000)
         voice.ask(text("AWAITING_CONFIRMATION")) { spoken ->
@@ -64,6 +65,7 @@ class CrossingConsentController(private val activity: AppCompatActivity, private
                 override fun onResults(results: Bundle?) {
                     if (token != generation || !active) return
                     val raw = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                    if (CrossingAnswer.stopRequested(raw)) { stop(); return }
                     val result = CrossingAnswer.parse(raw)
                     android.util.Log.i("CrossingConsent", "Speech parsed=${result?.toString() ?: "unknown"}")
                     if (result == null) retryOrExplain() else finish(result, if (result) "consent_yes" else "declined")
@@ -122,6 +124,11 @@ class CrossingConsentController(private val activity: AppCompatActivity, private
         cancel()
         voice.falar("crossing_consent", text(key))
         answer(accepted)
+    }
+
+    private fun stop() {
+        cancel()
+        onStop()
     }
 
     fun cancel() {

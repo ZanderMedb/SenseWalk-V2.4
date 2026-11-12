@@ -21,7 +21,7 @@ class RastreadorAuditTest {
             tracker.novoFrameCamera(0f,0f,1f,.35f)
             tracker.atualizar(1,90f + (i-6).coerceAtLeast(0)*8,100f,1.0+i*.1,80)
         }
-        assertEquals("APROXIMANDO",tracker.classificar(1).first)
+        assertEquals("POTENCIAL_CONFLITO",tracker.classificar(1).first)
     }
     @Test fun `low fps is not stationary by invalid time window`() {
         val tracker = tracker()

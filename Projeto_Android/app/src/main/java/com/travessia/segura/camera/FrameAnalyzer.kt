@@ -119,7 +119,7 @@ class FrameAnalyzer(
         val faixaDet = scene.crosswalk == CrosswalkStatus.CONFIRMED
         val faixaCentroX = scene.crosswalkBox?.cx ?: -1f
         val semCorFrame = when (scene.signal) {
-            SignalApplicability.PEDESTRIAN_GREEN -> "VERDE"
+            SignalApplicability.PEDESTRIAN_GREEN -> if (scene.signalAssociationVerified) "VERDE" else "NENHUM"
             SignalApplicability.PEDESTRIAN_RED -> "VERMELHO"
             else -> "NENHUM"
         }
@@ -192,11 +192,12 @@ class FrameAnalyzer(
                 vel = vel,
                 bbox = floatArrayOf(det.x1, det.y1, det.x2, det.y2),
                 bboxW = det.bboxW,
-                tid = tid
+                tid = tid,
+                trajectory = tracker.trajectory(tid,wf,hf)
             )
 
             val boxColor = when (classif) {
-                "APROXIMANDO" -> OverlayView.COLOR_APROXIMANDO
+                "APROXIMANDO", "POTENCIAL_CONFLITO" -> OverlayView.COLOR_APROXIMANDO
                 "EM_MOVIMENTO" -> OverlayView.COLOR_EM_MOVIMENTO
                 "MOVIMENTO_INCERTO" -> OverlayView.COLOR_OUTROS
                 else -> OverlayView.COLOR_PARADO
@@ -219,7 +220,7 @@ class FrameAnalyzer(
             SystemClock.elapsedRealtime() - capturedAtMs,
             coverageVerified = false, cameraReliable = useMotion,
             unobservedVehicles = vehicleTracker.lastStats.unobservedTracks)
-        crossing?.observe(risk, scene, coordinator?.lastRoadResult, capturedAtMs)
+        crossing?.observe(risk, scene, coordinator?.lastRoadResult, capturedAtMs, motion)
 
         stateMachine.processar(
             veiculosReais = veiculos,

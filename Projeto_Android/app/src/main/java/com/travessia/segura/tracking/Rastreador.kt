@@ -171,9 +171,10 @@ class Rastreador(private val settings: () -> Settings) {
         return when {
             !c.valid || !cameraReliable || cameraMotionLarge || samples == null || samples.size < 5 ||
                 samples.last().third - samples.first().third < .15 -> "MOVIMENTO_INCERTO" to c.vel
-            c.aproximando -> "APROXIMANDO" to c.vel
+            // Movement toward image centre is a possible conflict, not physical approach.
+            c.aproximando -> "POTENCIAL_CONFLITO" to c.vel
             kotlin.math.abs(c.vx) > config.velParadoPxs * w.coerceAtLeast(1) / 640f -> "EM_MOVIMENTO" to c.vel
-            c.emMovimento || taxaCrescimentoBBox(tid) >= config.crescimentoBBoxAproximando -> "MOVIMENTO_INCERTO" to c.vel
+            c.emMovimento || kotlin.math.abs(taxaCrescimentoBBox(tid)) >= config.crescimentoBBoxAproximando -> "MOVIMENTO_INCERTO" to c.vel
             else -> "PARADO" to c.vel
         }
     }
@@ -182,6 +183,11 @@ class Rastreador(private val settings: () -> Settings) {
         val config = settings()
         val bw = bboxLargura[tid] ?: return false
         return (bw.toFloat() / wFrame) >= config.limiarProximoPct
+    }
+
+    fun trajectory(tid: Int, width: Int, height: Int): ImageTrajectory {
+        val c = cinematica(tid,width,height)
+        return ImageTrajectory(c.vx,c.vy,taxaCrescimentoBBox(tid),c.valid && historicoOk(tid))
     }
 
     fun historicoOk(tid: Int, minimo: Int = 5): Boolean {
