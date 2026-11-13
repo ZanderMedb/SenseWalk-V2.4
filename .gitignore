@@ -26,6 +26,6 @@ Dados_IA/dados_treinamento_ia/modelos_exportados/
 Dados_IA/dados_treinamento_ia/validacoes_videos*/
 Dados_IA/dados_treinamento_ia/videos/*
 !Dados_IA/dados_treinamento_ia/videos/.gitkeep
-# Local real-video inputs and generated evidence (may contain identifiable people).
-/videos_teste/resultados*/
-/videos_teste/*.mp4
+# Resultados de execucoes e arquivos locais de testes com videos.
+/runs/
+/videos_teste/
