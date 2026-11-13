@@ -48,6 +48,10 @@ class LoginActivity : AppCompatActivity(), VoiceCommandController.Listener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.travessia.segura.benchmark.DebugFileLog.start(applicationContext) // debug: log em arquivo desde a abertura
+        // Somente diagnóstico de desempenho (A/B do pipeline da câmera), acionado por adb.
+        if (intent?.hasExtra("perf_fast_pipeline") == true)
+            com.travessia.segura.config.AppConfig(this).fastCameraPipeline = intent.getBooleanExtra("perf_fast_pipeline", true)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_login)
 

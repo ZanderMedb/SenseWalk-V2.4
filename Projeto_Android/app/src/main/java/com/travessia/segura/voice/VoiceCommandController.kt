@@ -22,6 +22,8 @@ class VoiceCommandController(
     private val listener: Listener
 ) : RecognitionListener {
 
+    companion object { private const val TAG = "VoiceCmd" }
+
     enum class Command {
         START,
         STOP,
@@ -29,7 +31,12 @@ class VoiceCommandController(
         SOURCE_PHONE,
         SOURCE_EXTERNAL,
         SOURCE_USB,
+        /** "Pronto": usuário terminou de apontar a câmera. Declaração, não prova de cobertura. */
         CONFIRM_DIRECTION,
+        CONTINUE,
+        REPEAT,
+        CANCEL,
+        RESTART,
         SETTINGS,
         HELP,
         LANGUAGE_PT,
@@ -47,13 +54,23 @@ class VoiceCommandController(
     private val appContext = context.applicationContext
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
+    val isListening: Boolean get() = listening
+    /** Comando já entregue por resultado parcial nesta janela: o final é ignorado (sem execução dupla). */
+    private var deliveredThisWindow = false
+    /** Após erros de cliente/ocupado, recriar o reconhecedor evita ficar preso em ERROR_RECOGNIZER_BUSY. */
+    private var recreateRecognizer = false
 
     fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(appContext)
 
     fun startListening(): Boolean {
-        if (!isAvailable()) return false
+        if (!isAvailable()) { android.util.Log.w(TAG, "SpeechRecognizer indisponível"); return false }
         if (listening) return true
 
+        if (recreateRecognizer) {
+            recreateRecognizer = false
+            runCatching { recognizer?.destroy() }
+            recognizer = null
+        }
         if (recognizer == null) {
             recognizer = SpeechRecognizer.createSpeechRecognizer(appContext).also {
                 it.setRecognitionListener(this)
@@ -65,16 +82,21 @@ class VoiceCommandController(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeTag(languageProvider()))
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, localeTag(languageProvider()))
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            // Parciais: "pronto"/"parar" respondem antes do fim da janela.
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PROMPT, "SenseWalk")
         }
 
         return try {
             listening = true
+            deliveredThisWindow = false
             listener.onListeningChanged(true)
             recognizer?.startListening(intent)
+            android.util.Log.i(TAG, "listen_open lang=${localeTag(languageProvider())}")
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "listen_open_failed ${e.message}")
+            recreateRecognizer = true
             listening = false
             listener.onListeningChanged(false)
             false
@@ -116,20 +138,45 @@ class VoiceCommandController(
     override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
     override fun onError(error: Int) {
+        android.util.Log.i(TAG, "listen_error code=$error delivered=$deliveredThisWindow")
+        if (error == SpeechRecognizer.ERROR_CLIENT || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+            error == 11 /* ERROR_SERVER_DISCONNECTED */) recreateRecognizer = true
+        val wasListening = listening
         listening = false
+        if (deliveredThisWindow) { if (wasListening) listener.onListeningChanged(false); return }
         listener.onListeningChanged(false)
         listener.onRecognitionError(error)
     }
 
-    override fun onPartialResults(partialResults: Bundle?) = Unit
+    override fun onPartialResults(partialResults: Bundle?) {
+        if (deliveredThisWindow || !listening) return
+        val candidates = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+        for (candidate in candidates) {
+            val command = parse(candidate)
+            // Parcial só para comandos inequívocos; o texto final decide os demais.
+            if (command != Command.UNKNOWN) {
+                android.util.Log.i(TAG, "listen_partial '$candidate' -> $command")
+                deliveredThisWindow = true
+                listening = false
+                runCatching { recognizer?.cancel() }
+                listener.onListeningChanged(false)
+                listener.onCommand(command, candidate)
+                return
+            }
+        }
+    }
 
     override fun onResults(results: Bundle?) {
+        val wasListening = listening
         listening = false
+        if (deliveredThisWindow) { if (wasListening) listener.onListeningChanged(false); return }
+        deliveredThisWindow = true
         listener.onListeningChanged(false)
 
         val candidates = results
             ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             .orEmpty()
+        android.util.Log.i(TAG, "listen_result $candidates")
 
         if (candidates.isEmpty()) {
             listener.onCommand(Command.UNKNOWN, "")
@@ -170,18 +217,28 @@ class VoiceCommandController(
         if (containsAny(text, "parar", "pare", "parar analise", "stop", "stop analysis", "detener", "deten", "parar analisis")) {
             return Command.STOP
         }
+        if (containsAny(text, "analisar novamente", "analisar de novo", "verificar novamente", "verificar de novo",
+                "analyze again", "check again", "analizar de nuevo", "analizar otra vez", "verificar otra vez")) {
+            return Command.RESTART
+        }
+        if (containsAny(text, "cancelar", "cancela", "cancel")) return Command.CANCEL
+        if (containsAny(text, "repetir", "repita", "repete", "repeat", "say again", "repite")) return Command.REPEAT
+        if (containsAny(text, "continuar", "continue", "continua", "proximo", "proxima", "next", "siguiente", "avancar")) {
+            return Command.CONTINUE
+        }
         if (containsAny(text, "iniciar", "iniciar analise", "comecar", "comece", "start", "start analysis", "begin", "iniciar analisis", "comenzar")) {
             return Command.START
         }
         if (containsAny(text, "status", "estado", "situacao", "situation", "state", "estado actual", "situacion")) {
             return Command.STATUS
         }
-        if (containsAny(text,"camera posicionada", "camera ready", "camara lista")) return Command.CONFIRM_DIRECTION
+        if (containsAny(text,"pronto", "pronta", "ready", "done", "listo", "lista",
+                "camera posicionada", "camera ready", "camara lista")) return Command.CONFIRM_DIRECTION
         if (containsAny(text,"usb", "uvc", "webcam")) return Command.SOURCE_USB
         if (containsAny(text, "camera do celular", "celular", "telefone", "phone camera", "phone", "mobile camera", "camara del celular", "telefono")) {
             return Command.SOURCE_PHONE
         }
-        if (containsAny(text, "camera externa", "x5", "oculos", "external camera", "glasses camera", "camara externa", "gafas")) {
+        if (containsAny(text, "camera externa", "external camera", "camara externa")) {
             return Command.SOURCE_EXTERNAL
         }
         if (containsAny(text, "configuracoes", "configuracao", "ajustes", "settings", "configuration", "configuracion")) {

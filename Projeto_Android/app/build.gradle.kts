@@ -7,6 +7,9 @@ android {
     namespace = "com.travessia.segura"
     compileSdk = 35
 
+    // Robolectric precisa dos recursos mesclados (AppCompat) para diálogos; afeta só os testes.
+    testOptions { unitTests { isIncludeAndroidResources = true } }
+
     defaultConfig {
         applicationId = "com.travessia.segura"
         minSdk = 26

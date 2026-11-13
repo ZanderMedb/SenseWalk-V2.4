@@ -1,79 +1,75 @@
 package com.travessia.segura.road
 
+/** Estados detalhados (UI/telemetria). AWAITING_CONFIRMATION/STARTING_ANALYSIS mantidos só por compatibilidade. */
 enum class AnalysisState { STOPPED, MONITORING, POSSIBLE_CROSSING, AWAITING_CONFIRMATION, STARTING_ANALYSIS, ACTIVE_ANALYSIS, INCONCLUSIVE, ERROR }
 
-/** Máquina pura. Perda isolada de segmentação nunca encerra alertas do YOLO. */
+/** Fase principal do MVP: FFNet procura rua -> YOLO analisa -> parado. */
+enum class MonitorPhase { WAITING_FOR_ROAD, ANALYZING, STOPPED }
+
+/**
+ * Máquina pura do gatilho FFNet. A FFNet apenas indica presença de pista; nunca autoriza travessia.
+ * - Uma amostra isolada não inicia análise: exige [minSamples] amostras consecutivas e frescas
+ *   cobrindo pelo menos [confirmationMs].
+ * - Calçada/borda NÃO é exigida para iniciar.
+ * - Durante ANALYZING, resultados FFNet são ignorados (o coordenador nem executa inferência).
+ * - Após término normal, só rearma depois de [cooldownMs], para a mesma rua não reiniciar em seguida.
+ */
 class AutomaticDetectionManager(
     private val confirmationMs: Long = 1500,
-    private val holdMs: Long = 10000,
-    private val cooldownMs: Long = 15000
+    @Suppress("unused") private val holdMs: Long = 10000,
+    private val cooldownMs: Long = 15000,
+    private val minSamples: Int = 3,
+    private val maxAgeMs: Long = 4000
 ) {
     var state = AnalysisState.STOPPED; private set
+    val phase: MonitorPhase get() = when (state) {
+        AnalysisState.STOPPED, AnalysisState.ERROR -> MonitorPhase.STOPPED
+        AnalysisState.ACTIVE_ANALYSIS -> MonitorPhase.ANALYZING
+        else -> MonitorPhase.WAITING_FOR_ROAD
+    }
     private var candidateSince: Long? = null
-    private var absentSince: Long? = null
-    private var lastEvidence = 0L
+    private var candidateSamples = 0
     private var lastSample = -1L
     private var lastExit = Long.MIN_VALUE / 2
-    private var askedAt = 0L
-    private var declined = false
-    fun start() { state = AnalysisState.MONITORING; candidateSince = null; absentSince = null; lastSample = -1; declined = false }
-    fun stop() { state = AnalysisState.STOPPED }
-    fun error() { state = AnalysisState.ERROR }
-    fun observeYolo(hazardOrCrossing: Boolean, now: Long) { if (hazardOrCrossing) lastEvidence = now }
+
+    fun start() { state = AnalysisState.MONITORING; resetCandidate(); lastSample = -1 }
+    fun stop() { state = AnalysisState.STOPPED; resetCandidate() }
+    fun error() { state = AnalysisState.ERROR; resetCandidate() }
+
+    /** Início manual: YOLO direto, sem depender da FFNet. */
+    fun beginAnalysis(): Boolean {
+        if (state == AnalysisState.ACTIVE_ANALYSIS) return false
+        state = AnalysisState.ACTIVE_ANALYSIS; resetCandidate()
+        return true
+    }
+
+    /** Encerramento normal: volta a procurar rua após o intervalo de rearme. */
+    fun finishAnalysis(now: Long) {
+        if (state != AnalysisState.ACTIVE_ANALYSIS) return
+        state = AnalysisState.MONITORING; lastExit = now; resetCandidate(); lastSample = -1
+    }
+
+    @Suppress("UNUSED_PARAMETER") fun observeYolo(hazardOrCrossing: Boolean, now: Long) = Unit
+
     fun update(result: RoadSegmentationResult, now: Long): AnalysisState {
-        if (state == AnalysisState.STOPPED || state == AnalysisState.ERROR) return state
-        if (now - result.timestamp !in 0..1500 || result.timestamp <= lastSample) return state
-        if (lastSample >= 0 && result.timestamp - lastSample > 1500) candidateSince = null
+        if (phase != MonitorPhase.WAITING_FOR_ROAD) return state
+        // Gatilho de presença de rua: máscara de até 4 s ainda vale (inferência FFNet lenta no aparelho);
+        // amostras com lacuna > 4 s não somam confirmação.
+        if (now - result.timestamp !in 0..maxAgeMs || result.timestamp <= lastSample) return state
+        if (lastSample >= 0 && result.timestamp - lastSample > maxAgeMs) resetCandidate()
         lastSample = result.timestamp
-        if (state == AnalysisState.STARTING_ANALYSIS) {
-            if (now - askedAt >= 10000 || !result.roadDetected) {
-                state = AnalysisState.INCONCLUSIVE; declined = true
-            } else { state = AnalysisState.ACTIVE_ANALYSIS; lastEvidence = now }
-            return state
-        }
-        if (state == AnalysisState.AWAITING_CONFIRMATION) {
-            if (!result.roadDetected || now - askedAt >= 25000) answer(false, now)
-            return state
-        }
-        if (declined) {
-            if (result.roadDetected) absentSince = null
-            else if (absentSince == null) absentSince = now
-            if (absentSince != null && now - absentSince!! >= holdMs) declined = false
+        if (!result.roadDetected || now - lastExit < cooldownMs) {
+            resetCandidate()
             state = if (result.roadDetected) AnalysisState.MONITORING else AnalysisState.INCONCLUSIVE
             return state
         }
-        if (state == AnalysisState.ACTIVE_ANALYSIS) {
-            // Só retorna após ausência persistente de pista E ausência de evidência do YOLO.
-            if (result.roadDetected) absentSince = null
-            else if (absentSince == null) absentSince = now
-            if (absentSince != null && now - absentSince!! >= holdMs && now - lastEvidence >= holdMs) {
-                state = AnalysisState.MONITORING; lastExit = now; candidateSince = null
-            }
-        } else if (result.possibleRoadBoundary && now - lastExit >= cooldownMs) {
-            if (candidateSince == null) candidateSince = now
-            state = if (now - candidateSince!! >= confirmationMs) {
-                askedAt = now
-                AnalysisState.AWAITING_CONFIRMATION
-            } else AnalysisState.POSSIBLE_CROSSING
-        } else {
-            candidateSince = null
-            state = if (result.roadDetected) AnalysisState.MONITORING else AnalysisState.INCONCLUSIVE
-        }
+        if (candidateSince == null) candidateSince = result.timestamp
+        candidateSamples++
+        state = if (candidateSamples >= minSamples && result.timestamp - candidateSince!! >= confirmationMs) {
+            resetCandidate(); AnalysisState.ACTIVE_ANALYSIS
+        } else AnalysisState.POSSIBLE_CROSSING
         return state
     }
 
-    fun answer(accepted: Boolean, now: Long): Boolean {
-        if (state != AnalysisState.AWAITING_CONFIRMATION) return false
-        val valid = accepted && now - askedAt in 0 until 25000
-        candidateSince = null
-        if (valid) { state = AnalysisState.STARTING_ANALYSIS; askedAt = now }
-        else { state = AnalysisState.MONITORING; declined = true; lastExit = now; absentSince = null }
-        return valid
-    }
-    fun tick(now: Long) {
-        if (state == AnalysisState.AWAITING_CONFIRMATION && now - askedAt >= 25000) answer(false,now)
-        if (state == AnalysisState.STARTING_ANALYSIS && now - askedAt >= 10000) {
-            state = AnalysisState.INCONCLUSIVE; declined = true; candidateSince = null
-        }
-    }
+    private fun resetCandidate() { candidateSince = null; candidateSamples = 0 }
 }

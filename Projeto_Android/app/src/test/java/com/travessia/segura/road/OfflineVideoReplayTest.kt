@@ -34,7 +34,7 @@ class OfflineVideoReplayTest {
         var processed = 0
         File(root, "tracking.csv").printWriter().use { tracksOut ->
             File(root, "cena_kotlin.csv").printWriter().use { sceneOut ->
-                tracksOut.println("video,frame,timestamp_ms,id,ghost,class_name,x1,y1,x2,y2,classification,speed_px_s,growth_s")
+                tracksOut.println("video,frame,timestamp_ms,id,ghost,class_name,x1,y1,x2,y2,classification,speed_px_s,growth_s,stable_classification")
                 sceneOut.println("video,frame,timestamp_ms,camera_dx,camera_dy,camera_confidence,crosswalk,signal_heuristic,signal_applicability,road_ratio,sidewalk_ratio,boundary_ratio,unobserved_tracks,new_tracks,removed_tracks,danger,reasons,stage,rotation_2d_deg,scale,background_residual,flow_host_ms")
                 for (folder in inputs) {
                     val input = JSONObject(File(folder, "replay.json").readText())
@@ -45,6 +45,7 @@ class OfflineVideoReplayTest {
                     val flow = SparseOpticalFlowEstimator()
                     val evidence = SceneEvidenceTracker()
                     val crossing = CrossingVerification().apply { start(0) }
+                    val memory = com.travessia.segura.tracking.CrossingSessionMemory().apply { beginSession(1) }
                     var previous = emptyList<FloatArray>()
                     for (i in 0 until frames.length()) {
                         val row = frames.getJSONObject(i)
@@ -54,7 +55,8 @@ class OfflineVideoReplayTest {
                         val camera = flow.estimate(bitmap, 0, previous)
                         bitmap.recycle()
                         val reliable = camera.confidence >= .35f
-                        motion.novoFrameCamera(camera.dx, camera.dy, camera.confidence, .35f)
+                        motion.novoFrameCamera(camera.dx, camera.dy, camera.confidence, .35f,
+                            camera.scale, camera.rotationDegrees, camera.parallaxSuspected, timestamp / 1000.0)
                         val raw = row.getJSONArray("detections")
                         val detections = (0 until raw.length()).map { j ->
                             val d = raw.getJSONArray(j); val id = d.getInt(0)
@@ -75,15 +77,22 @@ class OfflineVideoReplayTest {
                             if (reliable) camera.dy else 0f, timestamp)
                         for (d in tracked.filterNot { it.isGhost }) motion.atualizar(d.trackId,d.cx,d.cy,timestamp/1000.0,d.bboxW.toInt())
                         motion.limpar(timestamp/1000.0)
+                        // Mesmo encadeamento do app: estado bruto -> memória da sessão (estado estabilizado).
+                        val stable = HashMap<Int,String>()
                         val infos = tracked.filterNot { it.isGhost }.map { d ->
-                            val c = motion.classificar(d.trackId,w,h)
-                            VeiculoInfo(d.className,d.confidence,d.cx,d.cy,c.first,c.second,
+                            val a = motion.avaliar(d.trackId,w,h)
+                            val st = memory.observe(d.trackId,d.className,floatArrayOf(d.x1,d.y1,d.x2,d.y2),a.classification,
+                                a.confidence,timestamp,crossing.coverageDirection?.let { com.travessia.segura.tracking.CrossingSessionMemory.Direction.valueOf(it.name) },
+                                w,h,!reliable || motion.cameraAndando()).state
+                            stable[d.trackId] = st
+                            VeiculoInfo(d.className,d.confidence,d.cx,d.cy,st,a.speedPxS,
                                 floatArrayOf(d.x1,d.y1,d.x2,d.y2),d.bboxW,d.trackId,motion.trajectory(d.trackId,w,h))
                         }
                         for (d in tracked) {
                             val c = if (d.isGhost) "UNOBSERVED" to 0f else motion.classificar(d.trackId,w,h)
                             tracksOut.println(listOf(folder.name,row.getInt("frame"),timestamp,d.trackId,d.isGhost,
-                                d.className,d.x1,d.y1,d.x2,d.y2,c.first,c.second,motion.taxaCrescimentoBBox(d.trackId)).joinToString(","))
+                                d.className,d.x1,d.y1,d.x2,d.y2,c.first,c.second,motion.taxaCrescimentoBBox(d.trackId),
+                                stable[d.trackId] ?: "UNOBSERVED").joinToString(","))
                         }
                         val scene = evidence.update(detections.filter { it.classId > 4 },timestamp,w)
                         val risk = CrossingRiskAnalyzer.analyze(infos,w,h,scene.crosswalkBox,0,false,reliable,tracker.lastStats.unobservedTracks)

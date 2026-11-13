@@ -14,7 +14,8 @@ class SignalAndGestureValidationTest {
     private fun complete(signal: SignalApplicability, associated: Boolean = false): CrossingVerification {
         val c = CrossingVerification()
         val risk = CrossingRiskAssessment(emptySet(),emptyList(),SceneConfidence(true,true,true))
-        fun observe(t: Long) = c.observe(risk,SceneEvidence(CrosswalkStatus.CONFIRMED,null,signal,t,1000,associated),
+        fun observe(t: Long) = c.observe(risk,SceneEvidence(CrosswalkStatus.CONFIRMED,null,signal,t,1000,associated,
+            signalColorStable = associated), // associação atestada sinteticamente inclui cor estável
             RoadSegmentationResult(.4f,.2f,true,true,true,null,t,.01f),t)
         c.start(1000); observe(1100)
         for (start in listOf(2000L,4000L,6000L)) {

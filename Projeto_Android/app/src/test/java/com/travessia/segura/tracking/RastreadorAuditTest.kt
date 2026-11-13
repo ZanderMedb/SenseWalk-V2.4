@@ -33,13 +33,14 @@ class RastreadorAuditTest {
     }
     @Test fun `failed compensation and abrupt turn yield uncertain then recover`() {
         val tracker = tracker()
-        for (i in 0..8) {
+        // "Parado" exige >= 1 s de histórico com câmera estimada (antes 0,8 s bastava).
+        for (i in 0..10) {
             tracker.novoFrameCamera(0f,0f,1f,.35f)
             tracker.atualizar(1,50f,100f,1.0+i*.1,30)
         }
         assertEquals("PARADO",tracker.classificar(1).first)
         tracker.novoFrameCamera(30f,0f,1f,.35f)
-        tracker.atualizar(1,80f,100f,2.0,30)
+        tracker.atualizar(1,80f,100f,2.1,30)
         assertEquals("MOVIMENTO_INCERTO",tracker.classificar(1).first)
         tracker.novoFrameCamera(0f,0f,0f,.35f)
         assertEquals("MOVIMENTO_INCERTO",tracker.classificar(1).first)

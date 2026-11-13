@@ -31,12 +31,27 @@ class AppConfig(context: Context) {
         get()  = prefs.getBoolean("voice_auto_listen", false)
         set(v) = prefs.edit().putBoolean("voice_auto_listen", v).apply()
 
+    /**
+     * true: CameraX entrega RGBA já rotacionado (sem YUV -> JPEG -> Bitmap). false: caminho legado.
+     * Para comparar no aparelho: adb shell am start -n com.travessia.segura/.ui.LoginActivity --ez perf_fast_pipeline false
+     */
+    /** FOV horizontal da webcam USB (graus) para converter o deslizamento da imagem em giro estimado. */
+    var usbHorizontalFovDeg: Float
+        // 90°: webcams USB comuns são mais abertas que 70°; com 70° o giro era subestimado no teste real.
+        get() = prefs.getFloat("usb_horizontal_fov_deg", 90f).coerceIn(30f, 150f)
+        set(v) = prefs.edit().putFloat("usb_horizontal_fov_deg", v.coerceIn(30f, 150f)).apply()
+
+    var fastCameraPipeline: Boolean
+        get() = prefs.getBoolean("fast_camera_pipeline", true)
+        set(v) = prefs.edit().putBoolean("fast_camera_pipeline", v).apply()
+
     var automaticRoadDetection: Boolean
         get() = prefs.getBoolean("automatic_road_detection", true)
         set(v) = prefs.edit().putBoolean("automatic_road_detection", v).apply()
     var cameraSource: Int
-        get() = prefs.getInt("camera_source",0).coerceIn(0,2)
-        set(v) = prefs.edit().putInt("camera_source",v.coerceIn(0,2)).apply()
+        // 0 = câmera do celular, 2 = USB/UVC. O valor 1 (X5, descontinuada) volta para o celular.
+        get() = prefs.getInt("camera_source",0).let { if (it == 2) 2 else 0 }
+        set(v) = prefs.edit().putInt("camera_source", if (v == 2) 2 else 0).apply()
     var roadDebugOverlay: Boolean
         get() = prefs.getBoolean("road_debug_overlay", false)
         set(v) = prefs.edit().putBoolean("road_debug_overlay", v).apply()
@@ -291,10 +306,13 @@ class AppConfig(context: Context) {
     fun sufixoMovimento(classif: String): String {
         return when (classif) {
             "PARADO" -> tr("motion_stopped_short")
+            "APARENTEMENTE_PARADO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_apparently_stopped")
             "EM_MOVIMENTO" -> tr("motion_moving_short")
             "APROXIMANDO" -> tr("motion_approaching_short")
             "POTENCIAL_CONFLITO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_potential")
             "MOVIMENTO_INCERTO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_uncertain")
+            "POSSIVEL_APROXIMACAO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_possible_approach")
+            "POSSIVEL_AFASTAMENTO" -> com.travessia.segura.road.RoadText.get(appLanguage,"motion_possible_receding")
             else -> ""
         }
     }

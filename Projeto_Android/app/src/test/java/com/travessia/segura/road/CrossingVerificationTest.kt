@@ -13,19 +13,22 @@ class CrossingVerificationTest {
         SceneEvidence(CrosswalkStatus.CONFIRMED,crosswalk,signal,t)
     private fun road(t: Long) = RoadSegmentationResult(.4f,.2f,true,true,true,null,t,.01f)
     private val clear = CrossingRiskAssessment(emptySet(),emptyList(),SceneConfidence(true,true,true))
-    private fun samples(c: CrossingVerification, from: Long, signal: SignalApplicability = SignalApplicability.NOT_APPLICABLE_CONFIRMED) {
+    private fun samples(c: CrossingVerification, from: Long, signal: SignalApplicability = SignalApplicability.NOT_APPLICABLE_CONFIRMED,
+        risk: CrossingRiskAssessment = clear) {
         for (i in 0..3) {
             val t = from + 500L * i
-            c.observe(clear,scene(t,signal),road(t),t)
+            c.observe(risk,scene(t,signal),road(t),t)
         }
     }
+    private val uncovered = CrossingRiskAssessment(emptySet(),emptyList(),SceneConfidence(true,true,false))
 
     @Test fun lateralVerificationNeedsButtonAndFreshDistinctSamples() {
         val c = CrossingVerification()
         c.start(1000)
         c.observe(clear,scene(1100),road(1100),1100)
         assertEquals(CrossingVerification.Stage.AWAIT_RIGHT,c.stage)
-        samples(c,1200)
+        // Sem cobertura comprovada, frames não avançam a etapa. (Com cobertura de sensor ela avança sozinha.)
+        samples(c,1200,risk=uncovered)
         assertEquals(CrossingVerification.Stage.AWAIT_RIGHT,c.stage)
         c.confirmCameraDirection(3000); samples(c,3100)
         assertEquals(CrossingVerification.Stage.AWAIT_LEFT,c.stage)
@@ -110,7 +113,8 @@ class CrossingVerificationTest {
         assertFalse(c.hasCrosswalk)
         c.observe(clear,scene(1600),road(1600),1600)
         assertTrue(c.hasCrosswalk)
-        assertEquals(CrossingVerification.Stage.AWAIT_RIGHT,c.stage)
+        // Faixa confirmada não reinicia a sequência: continua na direita (frame coberto já começa a observar).
+        assertEquals(CrossingVerification.Direction.RIGHT,c.currentDirection)
     }
 
     @Test fun pedestrianLightRequiresAssociationAndGreenClockResetsOnLoss() {

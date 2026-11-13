@@ -1,24 +1,26 @@
 package com.travessia.segura.detection
 
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 
 /**
- * Tracker de veículos V2.4, inspirado na estratégia de duas etapas do ByteTrack.
+ * Tracker de veículos V2.4 (duas etapas, inspirado no ByteTrack), leve e sem dependências nativas.
  *
- * Principais diferenças em relação ao tracker antigo:
- * - associa primeiro detecções de confiança alta e depois tenta recuperar tracks
- *   existentes usando detecções de confiança mais baixa;
- * - previsão de posição com velocidade relativa do objeto;
- * - compensação da translação global estimada pelo optical flow;
- * - matching class-aware, IoU + distância do centro + similaridade de tamanho;
- * - confirmação temporal e ghosts curtos para reduzir pisca-pisca;
- * - estatísticas por frame para o benchmark.
- *
- * Não é a implementação oficial completa do ByteTrack. É uma versão leve, sem
- * dependências nativas extras, adequada ao protótipo Android atual.
+ * Associação por custo, com previsão cinemática dependente do intervalo REAL entre frames:
+ * - a última caixa OBSERVADA fica separada da posição apenas PREVISTA. Ghosts são previsões, nunca
+ *   observações; não alimentam velocidade nem histórico de movimento;
+ * - previsão = observado + movimento global acumulado da câmera + velocidade relativa x tempo desde a
+ *   última observação. Assim um carro rápido continua associável mesmo após 1 a 3 frames perdidos;
+ * - a janela de associação cresce com a velocidade estimada, com o tamanho da caixa e com o tempo sem
+ *   observação, limitada para não "puxar" veículos distantes;
+ * - custo combina IoU, distância normalizada pela janela, tamanho, classe (grupo veículo tolerado) e
+ *   coerência de direção, o que evita trocar IDs quando duas trajetórias se cruzam;
+ * - detecção não associada que se sobrepõe fortemente a um track já associado (ex.: car/truck no
+ *   mesmo objeto) não cria ID novo;
+ * - persistência sem observação limitada no tempo ([maxUnobservedMs]) e número máximo de tracks.
  */
 class AdvancedVehicleTracker(
     private val minIoU: Float = 0.035f,
@@ -27,7 +29,10 @@ class AdvancedVehicleTracker(
     private val maxMisses: Int = 8,
     private var ghostFrames: Int = 4,
     private val bboxSmoothingAlpha: Float = 0.74f,
-    private val highConfidenceThreshold: Float = 0.35f
+    private val highConfidenceThreshold: Float = 0.35f,
+    private val maxUnobservedMs: Long = 1500,
+    private val maxTracks: Int = 48,
+    private val maxGatePct: Float = 0.38f
 ) {
     data class TrackerStats(
         val activeTracks: Int = 0,
@@ -37,19 +42,29 @@ class AdvancedVehicleTracker(
         val lowConfidenceRecoveries: Int = 0,
         val ghostCount: Int = 0,
         val confirmedVisible: Int = 0,
-        val unobservedTracks: Int = 0
+        val unobservedTracks: Int = 0,
+        /** Tracks re-associados depois de 1+ frames sem observação. */
+        val recoveredAfterMiss: Int = 0,
+        /** Detecções duplicadas (mesmo objeto) que não geraram ID novo. */
+        val duplicatesSuppressed: Int = 0
     )
 
     private data class TrackState(
-        var det: RawDetection,
+        /** Última caixa observada (suavizada), no referencial da imagem do instante [lastSeenMs]. */
+        var observed: RawDetection,
         val trackId: Int,
         var misses: Int = 0,
         var hits: Int = 1,
         var confirmed: Boolean = false,
-        var vxRelative: Float = 0f,
-        var vyRelative: Float = 0f,
-        var confidenceEma: Float = det.confidence,
-        var lastSeenMs: Long = 0L
+        /** Velocidade relativa ao fundo (px/s), aprendida só com observações reais. */
+        var vx: Float = 0f,
+        var vy: Float = 0f,
+        var velocitySamples: Int = 0,
+        var confidenceEma: Float = observed.confidence,
+        var lastSeenMs: Long = 0L,
+        /** Translação global da câmera acumulada desde a última observação. */
+        var cameraSinceSeenX: Float = 0f,
+        var cameraSinceSeenY: Float = 0f
     )
 
     private data class IndexedDetection(val originalIndex: Int, val det: RawDetection)
@@ -58,7 +73,6 @@ class AdvancedVehicleTracker(
     private val tracks = mutableMapOf<Int, TrackState>()
     private var nextId = 0
     private var lastFrameMs = -1L
-    private var intervalSeconds = .1f
     private var frameMs = 0L
 
     var lastStats: TrackerStats = TrackerStats()
@@ -73,16 +87,19 @@ class AdvancedVehicleTracker(
         timestampMs: Long = System.nanoTime() / 1_000_000L
     ): List<TrackedDetection> {
         if (timestampMs <= lastFrameMs) return emptyList()
-        intervalSeconds = if (lastFrameMs >= 0) ((timestampMs-lastFrameMs)/1000f).coerceIn(.001f,1.5f) else .1f
         lastFrameMs = timestampMs
         frameMs = timestampMs
-        // Expiração em tempo real, independente de FPS e do número de ghosts desenhados.
-        val oldCount = tracks.size
-        tracks.entries.removeAll { timestampMs-it.value.lastSeenMs > 1500 }
-        val expiredCount = oldCount - tracks.size
         val fw = frameWidth.coerceAtLeast(1).toFloat()
         val fh = frameHeight.coerceAtLeast(1).toFloat()
         val diagonal = hypot(fw, fh).coerceAtLeast(1f)
+
+        // Movimento global da câmera deste frame entra em todas as previsões.
+        for (t in tracks.values) { t.cameraSinceSeenX += cameraDx; t.cameraSinceSeenY += cameraDy }
+
+        // Expiração por tempo real sem observação, independente do FPS.
+        val before = tracks.size
+        tracks.entries.removeAll { timestampMs - it.value.lastSeenMs > maxUnobservedMs }
+        var removedTracks = before - tracks.size
 
         val allIndexed = detections.mapIndexed { index, det -> IndexedDetection(index, det) }
         val high = allIndexed.filter { it.det.confidence >= highConfidenceThreshold }
@@ -92,83 +109,61 @@ class AdvancedVehicleTracker(
         val matchedDetections = mutableSetOf<Int>()
         var highMatches = 0
         var lowRecoveries = 0
+        var recovered = 0
+
+        fun apply(matches: Map<Int, IndexedDetection>, low: Boolean) {
+            for ((trackId, indexed) in matches) {
+                val track = tracks[trackId] ?: continue
+                if (track.misses > 0) recovered++
+                updateMatchedTrack(track, indexed.det)
+                matchedTracks.add(trackId)
+                matchedDetections.add(indexed.originalIndex)
+                if (low) lowRecoveries++ else highMatches++
+            }
+        }
+
+        // Etapa 1: detecções confiáveis contra todos os tracks.
+        apply(matchStage(tracks.keys.toList(), high, diagonal, 1f), low = false)
+        // Etapa 2: detecções fracas só recuperam tracks existentes (oscilação de confiança).
+        apply(matchStage(tracks.keys.filter { it !in matchedTracks },
+            low.filter { it.originalIndex !in matchedDetections }, diagonal, 1.2f), low = true)
+
+        // Novos tracks, exceto duplicatas fortes de um objeto já associado neste frame.
         var newTracks = 0
-        var removedTracks = expiredCount
-
-        // Etapa 1: detecções mais confiáveis.
-        val firstMatches = matchStage(
-            candidateTracks = tracks.keys.toList(),
-            detections = high,
-            diagonal = diagonal,
-            cameraDx = cameraDx,
-            cameraDy = cameraDy,
-            distanceMultiplier = 1f
-        )
-        for ((trackId, indexed) in firstMatches) {
-            val track = tracks[trackId] ?: continue
-            updateMatchedTrack(track, indexed.det, cameraDx, cameraDy)
-            matchedTracks.add(trackId)
-            matchedDetections.add(indexed.originalIndex)
-            highMatches++
-        }
-
-        // Etapa 2: uma detecção fraca pode recuperar um track já confirmado. Isso é a
-        // ideia mais importante do ByteTrack para evitar que um objeto suma por um frame.
-        val unmatchedTracks = tracks.values
-            .filter { it.trackId !in matchedTracks }
-            .map { it.trackId }
-        val secondMatches = matchStage(
-            candidateTracks = unmatchedTracks,
-            detections = low.filter { it.originalIndex !in matchedDetections },
-            diagonal = diagonal,
-            cameraDx = cameraDx,
-            cameraDy = cameraDy,
-            distanceMultiplier = 1.22f
-        )
-        for ((trackId, indexed) in secondMatches) {
-            val track = tracks[trackId] ?: continue
-            updateMatchedTrack(track, indexed.det, cameraDx, cameraDy)
-            matchedTracks.add(trackId)
-            matchedDetections.add(indexed.originalIndex)
-            lowRecoveries++
-        }
-
-        // Detecções não associadas podem iniciar novos tracks. As fracas precisam
-        // persistir por mais frames antes de serem confirmadas.
+        var duplicates = 0
         for (indexed in allIndexed) {
             if (indexed.originalIndex in matchedDetections) continue
-            val track = TrackState(det = indexed.det, trackId = nextId++, lastSeenMs = timestampMs)
+            val duplicate = matchedTracks.any { id -> tracks[id]?.let { computeIoU(it.observed, indexed.det) >= .55f } == true }
+            if (duplicate) { duplicates++; continue }
+            val track = TrackState(observed = indexed.det, trackId = nextId++, lastSeenMs = timestampMs)
             track.confirmed = shouldConfirm(track)
             tracks[track.trackId] = track
-            matchedTracks.add(track.trackId) // observado no frame atual; não deve virar miss imediatamente
+            matchedTracks.add(track.trackId)
             newTracks++
         }
 
-        // Avança tracks perdidos usando movimento da câmera + velocidade relativa.
-        val toRemove = mutableListOf<Int>()
-        for (track in tracks.values) {
-            if (track.trackId in matchedTracks) continue
+        for (track in tracks.values) if (track.trackId !in matchedTracks) {
             track.misses++
-            track.det = predictNextObserved(track, cameraDx, cameraDy)
             track.confidenceEma *= 0.86f
-            if (timestampMs - track.lastSeenMs > 1500) toRemove.add(track.trackId)
         }
-        for (id in toRemove) {
-            tracks.remove(id)
-            removedTracks++
+        if (tracks.size > maxTracks) {
+            // Estrutura limitada: descartar primeiro os tracks sem observação há mais tempo.
+            val excess = tracks.values.sortedWith(compareBy<TrackState> { it.misses == 0 }.thenBy { it.lastSeenMs })
+                .take(tracks.size - maxTracks)
+            for (t in excess) { tracks.remove(t.trackId); removedTracks++ }
         }
 
         val result = mutableListOf<TrackedDetection>()
         var ghosts = 0
         var visible = 0
         for (track in tracks.values.sortedBy { it.trackId }) {
-            // Detecção nova/fraca é uma observação incerta, não ausência de veículo.
             if (track.misses == 0) {
                 visible++
-                result.add(track.toTracked(isGhost = false))
+                result.add(track.toTracked(track.observed, isGhost = false))
             } else if (track.misses <= ghostFrames) {
+                // Ghost = posição prevista, marcada como não observada.
                 ghosts++
-                result.add(track.toTracked(isGhost = true))
+                result.add(track.toTracked(predict(track, timestampMs), isGhost = true))
             }
         }
 
@@ -180,7 +175,9 @@ class AdvancedVehicleTracker(
             lowConfidenceRecoveries = lowRecoveries,
             ghostCount = ghosts,
             confirmedVisible = visible,
-            unobservedTracks = tracks.values.count { it.misses > 0 }
+            unobservedTracks = tracks.values.count { it.misses > 0 },
+            recoveredAfterMiss = recovered,
+            duplicatesSuppressed = duplicates
         )
         return result
     }
@@ -190,6 +187,7 @@ class AdvancedVehicleTracker(
         ghostFrames = ghostFrameCount.coerceIn(0, maxMisses)
     }
 
+    /** Troca de câmera/nova sessão: IDs e históricos não atravessam sessões independentes. */
     fun reset() {
         tracks.clear()
         nextId = 0
@@ -197,54 +195,80 @@ class AdvancedVehicleTracker(
         lastStats = TrackerStats()
     }
 
+    val trackCount: Int get() = tracks.size
+
+    private fun predict(track: TrackState, nowMs: Long): RawDetection {
+        val dt = ((nowMs - track.lastSeenMs) / 1000f).coerceIn(0f, 1.5f)
+        // Velocidade só depois de duas observações; amortecida em perdas longas.
+        val damping = if (track.velocitySamples == 0) 0f else 0.9f.pow((track.misses - 1).coerceAtLeast(0))
+        return track.observed.shift(track.cameraSinceSeenX + track.vx * dt * damping,
+            track.cameraSinceSeenY + track.vy * dt * damping)
+    }
+
+    /** Janela de associação: base + tamanho do objeto + deslocamento esperado pela velocidade e tempo. */
+    private fun gate(track: TrackState, dtSeconds: Float, diagonal: Float, multiplier: Float): Float {
+        val size = max(track.observed.bboxW, track.observed.bboxH)
+        val speed = hypot(track.vx, track.vy)
+        val base = max(maxCenterDistancePct * diagonal, .55f * size)
+        val uncertainty = .5f * speed * dtSeconds + .04f * diagonal * track.misses
+        return min((base + uncertainty) * multiplier, maxGatePct * diagonal)
+    }
+
     private fun matchStage(
         candidateTracks: List<Int>,
         detections: List<IndexedDetection>,
         diagonal: Float,
-        cameraDx: Float,
-        cameraDy: Float,
-        distanceMultiplier: Float
+        multiplier: Float
     ): Map<Int, IndexedDetection> {
         if (candidateTracks.isEmpty() || detections.isEmpty()) return emptyMap()
-
         val candidates = mutableListOf<Candidate>()
         val byOriginalIndex = detections.associateBy { it.originalIndex }
 
         for (trackId in candidateTracks) {
             val track = tracks[trackId] ?: continue
-            val predicted = predictForMatching(track, cameraDx, cameraDy)
+            val dt = ((frameMs - track.lastSeenMs) / 1000f).coerceIn(.001f, 1.5f)
+            val predicted = predict(track, frameMs)
+            val maxDistance = gate(track, dt, diagonal, multiplier)
             for (indexed in detections) {
                 val det = indexed.det
-                val sameClass = track.det.classId == det.classId
+                val sameClass = track.observed.classId == det.classId
+                val sameGroup = sameClass || (isVehicle(track.observed.classId) && isVehicle(det.classId))
+                if (!sameGroup) continue // semáforo/faixa nunca herdam ID de veículo
                 val iou = computeIoU(predicted, det)
-                val centerDistance = hypot(predicted.cx - det.cx, predicted.cy - det.cy) / diagonal
-                val sizeRatio = sizeRatio(predicted, det)
-                val maxDistance = maxCenterDistancePct * distanceMultiplier
+                val distance = hypot(predicted.cx - det.cx, predicted.cy - det.cy)
+                val ratio = sizeRatio(predicted, det)
+                // Sem velocidade aprendida (2º frame do track): um veículo rápido pode saltar ~2 larguras
+                // na horizontal. Janela estendida só para mesma classe, tamanho parecido e mesma faixa vertical.
+                val lateralJump = track.velocitySamples == 0 && sameClass && ratio <= 1.6f &&
+                    abs(det.cy - predicted.cy) <= .6f * predicted.bboxH &&
+                    abs(det.cx - predicted.cx) <= min(2.2f * predicted.bboxW, maxGatePct * diagonal)
+                if (!((iou >= minIoU || distance <= maxDistance || lateralJump) && ratio <= maxSizeRatio)) continue
+                // Troca car/truck/bus só com geometria bem coerente.
+                if (!sameClass && iou < .17f && distance > .5f * maxDistance) continue
 
-                val geometryOk = (iou >= minIoU || centerDistance <= maxDistance) && sizeRatio <= maxSizeRatio
-                if (!geometryOk) continue
+                // Coerência de direção: deslocamento oposto à velocidade aprendida é penalizado.
+                val speed = hypot(track.vx, track.vy)
+                val direction = if (track.velocitySamples >= 2 && speed > .05f * diagonal) {
+                    val obsX = det.cx - (track.observed.cx + track.cameraSinceSeenX)
+                    val obsY = det.cy - (track.observed.cy + track.cameraSinceSeenY)
+                    val norm = hypot(obsX, obsY)
+                    if (norm < 1f) 1f else ((obsX * track.vx + obsY * track.vy) / (norm * speed) + 1f) / 2f
+                } else 1f
 
-                // Troca de classe só é aceita quando a geometria é bastante coerente.
-                if (!sameClass && iou < 0.17f && centerDistance > 0.075f * distanceMultiplier) continue
-
-                val centerScore = (1f - centerDistance / maxDistance).coerceIn(0f, 1f)
-                val sizeScore = (1f / sizeRatio).coerceIn(0f, 1f)
-                val classScore = if (sameClass) 1f else 0.22f
-                val confidenceScore = det.confidence.coerceIn(0f, 1f)
-                val score = 0.43f * iou +
-                        0.31f * centerScore +
-                        0.11f * sizeScore +
-                        0.08f * classScore +
-                        0.07f * confidenceScore
+                val centerScore = (1f - distance / max(maxDistance, if (lateralJump) 2.2f * predicted.bboxW else 0f)).coerceIn(0f, 1f)
+                val sizeScore = (1f / ratio).coerceIn(0f, 1f)
+                val classScore = if (sameClass) 1f else .5f
+                val score = .38f * iou + .30f * centerScore + .10f * sizeScore + .08f * classScore +
+                    .06f * det.confidence.coerceIn(0f, 1f) + .08f * direction
                 candidates.add(Candidate(trackId, indexed.originalIndex, score))
             }
         }
 
+        // Atribuição gulosa pelo maior custo-benefício (n pequeno; equivalente prático ao húngaro).
         candidates.sortByDescending { it.score }
         val usedTracks = mutableSetOf<Int>()
         val usedDetections = mutableSetOf<Int>()
         val result = linkedMapOf<Int, IndexedDetection>()
-
         for (candidate in candidates) {
             if (candidate.trackId in usedTracks || candidate.detIndex in usedDetections) continue
             val indexed = byOriginalIndex[candidate.detIndex] ?: continue
@@ -255,31 +279,33 @@ class AdvancedVehicleTracker(
         return result
     }
 
-    private fun updateMatchedTrack(
-        track: TrackState,
-        incoming: RawDetection,
-        cameraDx: Float,
-        cameraDy: Float
-    ) {
-        val previousObserved = track.det
-        val cameraShiftedPrevious = previousObserved.shift(cameraDx, cameraDy)
+    private fun updateMatchedTrack(track: TrackState, incoming: RawDetection) {
+        val dt = ((frameMs - track.lastSeenMs) / 1000f).coerceIn(.001f, 1.5f)
+        // Referência = última OBSERVAÇÃO deslocada pela câmera (nunca uma posição prevista).
+        val reference = track.observed.shift(track.cameraSinceSeenX, track.cameraSinceSeenY)
+        val relX = (incoming.cx - reference.cx) / dt
+        val relY = (incoming.cy - reference.cy) / dt
+        if (track.velocitySamples == 0) { track.vx = relX; track.vy = relY }
+        else {
+            // Após uma perda, a velocidade da lacuna é menos confiável: peso menor, mas não zerada.
+            val w = if (track.misses > 0) .3f else .42f
+            track.vx = (1 - w) * track.vx + w * relX
+            track.vy = (1 - w) * track.vy + w * relY
+        }
+        track.velocitySamples++
 
-        // Remove o movimento global da câmera antes de aprender a velocidade do objeto.
-        val relativeDx = incoming.cx - cameraShiftedPrevious.cx
-        val relativeDy = incoming.cy - cameraShiftedPrevious.cy
-        track.vxRelative = if (track.misses > 0) 0f else 0.58f * track.vxRelative + 0.42f * relativeDx / intervalSeconds
-        track.vyRelative = if (track.misses > 0) 0f else 0.58f * track.vyRelative + 0.42f * relativeDy / intervalSeconds
-
-        val a = bboxSmoothingAlpha
-        track.det = RawDetection(
-            x1 = a * incoming.x1 + (1f - a) * cameraShiftedPrevious.x1,
-            y1 = a * incoming.y1 + (1f - a) * cameraShiftedPrevious.y1,
-            x2 = a * incoming.x2 + (1f - a) * cameraShiftedPrevious.x2,
-            y2 = a * incoming.y2 + (1f - a) * cameraShiftedPrevious.y2,
+        // Após perda, não suavizar com a posição antiga: a nova observação manda.
+        val a = if (track.misses > 0) 1f else bboxSmoothingAlpha
+        track.observed = RawDetection(
+            x1 = a * incoming.x1 + (1f - a) * reference.x1,
+            y1 = a * incoming.y1 + (1f - a) * reference.y1,
+            x2 = a * incoming.x2 + (1f - a) * reference.x2,
+            y2 = a * incoming.y2 + (1f - a) * reference.y2,
             classId = incoming.classId,
             className = incoming.className,
             confidence = incoming.confidence
         )
+        track.cameraSinceSeenX = 0f; track.cameraSinceSeenY = 0f
         track.misses = 0
         track.lastSeenMs = frameMs
         track.hits++
@@ -287,74 +313,33 @@ class AdvancedVehicleTracker(
         if (!track.confirmed) track.confirmed = shouldConfirm(track)
     }
 
-    private fun predictForMatching(track: TrackState, cameraDx: Float, cameraDy: Float): RawDetection {
-        val damping = 0.88f.pow(track.misses.coerceAtLeast(0))
-        return track.det.shift(
-            cameraDx + track.vxRelative * intervalSeconds * damping,
-            cameraDy + track.vyRelative * intervalSeconds * damping
-        )
+    private fun shouldConfirm(track: TrackState): Boolean = when {
+        track.confidenceEma >= 0.60f -> track.hits >= 1
+        track.confidenceEma >= 0.32f -> track.hits >= 2
+        else -> track.hits >= 3
     }
 
-    private fun predictNextObserved(track: TrackState, cameraDx: Float, cameraDy: Float): RawDetection {
-        val damping = 0.86f.pow(track.misses.coerceAtLeast(1) - 1)
-        return track.det.shift(
-            cameraDx + track.vxRelative * intervalSeconds * damping,
-            cameraDy + track.vyRelative * intervalSeconds * damping
-        )
+    private fun TrackState.toTracked(box: RawDetection, isGhost: Boolean): TrackedDetection {
+        val conf = if (isGhost) (confidenceEma * 0.82f.pow(misses.coerceAtLeast(1))).coerceAtLeast(0.05f)
+            else confidenceEma
+        return TrackedDetection(trackId = trackId, x1 = box.x1, y1 = box.y1, x2 = box.x2, y2 = box.y2,
+            classId = box.classId, className = box.className, confidence = conf, isGhost = isGhost, hits = hits)
     }
 
-    private fun shouldConfirm(track: TrackState): Boolean {
-        return when {
-            track.confidenceEma >= 0.60f -> track.hits >= 1
-            track.confidenceEma >= 0.32f -> track.hits >= 2
-            else -> track.hits >= 3
-        }
-    }
+    private fun isVehicle(classId: Int) = classId in 0..4
 
-    private fun TrackState.toTracked(isGhost: Boolean): TrackedDetection {
-        val conf = if (isGhost) {
-            (confidenceEma * 0.82f.pow(misses.coerceAtLeast(1))).coerceAtLeast(0.05f)
-        } else confidenceEma
-        return TrackedDetection(
-            trackId = trackId,
-            x1 = det.x1,
-            y1 = det.y1,
-            x2 = det.x2,
-            y2 = det.y2,
-            classId = det.classId,
-            className = det.className,
-            confidence = conf,
-            isGhost = isGhost,
-            hits = hits
-        )
-    }
-
-    private fun RawDetection.shift(dx: Float, dy: Float): RawDetection = copy(
-        x1 = x1 + dx,
-        y1 = y1 + dy,
-        x2 = x2 + dx,
-        y2 = y2 + dy
-    )
+    private fun RawDetection.shift(dx: Float, dy: Float): RawDetection =
+        copy(x1 = x1 + dx, y1 = y1 + dy, x2 = x2 + dx, y2 = y2 + dy)
 
     private fun sizeRatio(a: RawDetection, b: RawDetection): Float {
-        val aw = a.bboxW.coerceAtLeast(1f)
-        val ah = a.bboxH.coerceAtLeast(1f)
-        val bw = b.bboxW.coerceAtLeast(1f)
-        val bh = b.bboxH.coerceAtLeast(1f)
-        val wr = max(aw / bw, bw / aw)
-        val hr = max(ah / bh, bh / ah)
+        val wr = max(a.bboxW.coerceAtLeast(1f) / b.bboxW.coerceAtLeast(1f), b.bboxW.coerceAtLeast(1f) / a.bboxW.coerceAtLeast(1f))
+        val hr = max(a.bboxH.coerceAtLeast(1f) / b.bboxH.coerceAtLeast(1f), b.bboxH.coerceAtLeast(1f) / a.bboxH.coerceAtLeast(1f))
         return max(wr, hr)
     }
 
     private fun computeIoU(a: RawDetection, b: RawDetection): Float {
-        val ix1 = max(a.x1, b.x1)
-        val iy1 = max(a.y1, b.y1)
-        val ix2 = min(a.x2, b.x2)
-        val iy2 = min(a.y2, b.y2)
-        val inter = (ix2 - ix1).coerceAtLeast(0f) * (iy2 - iy1).coerceAtLeast(0f)
-        val areaA = a.bboxW.coerceAtLeast(0f) * a.bboxH.coerceAtLeast(0f)
-        val areaB = b.bboxW.coerceAtLeast(0f) * b.bboxH.coerceAtLeast(0f)
-        val union = areaA + areaB - inter
+        val inter = (min(a.x2, b.x2) - max(a.x1, b.x1)).coerceAtLeast(0f) * (min(a.y2, b.y2) - max(a.y1, b.y1)).coerceAtLeast(0f)
+        val union = a.bboxW.coerceAtLeast(0f) * a.bboxH.coerceAtLeast(0f) + b.bboxW.coerceAtLeast(0f) * b.bboxH.coerceAtLeast(0f) - inter
         return if (union > 0f) inter / union else 0f
     }
 }

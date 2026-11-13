@@ -58,4 +58,42 @@ class VoiceSystemAuditTest {
         voice.falarEstado("instruction","right","RIGHT")
         assertEquals(2,tts.spokenTextList.count { it == "RIGHT" })
     }
+    @Test fun dangerInterruptsAnOrdinaryGuidanceInstruction() {
+        voice.falarEstado("crossing_stage","AWAIT_RIGHT","APONTE DIREITA")
+        assertEquals("APONTE DIREITA",tts.lastSpokenText)
+        voice.falarEstado("scene_approach","approaching_left","PERIGO",VoicePriority.SAFETY)
+        assertEquals("PERIGO",tts.lastSpokenText)
+    }
+    @Test fun staleInstructionIsNotSpokenAfterStageChange() {
+        voice.falarEstado("scene_approach","car","DANGER",VoicePriority.SAFETY)
+        voice.falarEstado("crossing_stage","AWAIT_RIGHT","APONTE DIREITA") // fica na fila atrás do perigo
+        voice.falarEstado("crossing_stage","AWAIT_LEFT","APONTE ESQUERDA")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(tts.spokenTextList.contains("APONTE DIREITA"))
+    }
+    @Test fun sameStageRequestedEveryFrameIsSpokenOnce() {
+        repeat(100) { voice.falarEstado("crossing_stage","AWAIT_RIGHT","APONTE DIREITA") }
+        assertEquals(1,tts.spokenTextList.count { it == "APONTE DIREITA" })
+    }
+    @Test fun stopControlOutranksGuidanceButNotDanger() {
+        voice.falarEstado("crossing_stage","AWAIT_RIGHT","APONTE DIREITA")
+        voice.forcarPrioritario("cancelado","PARADO",VoicePriority.CONTROL)
+        assertEquals("PARADO",tts.lastSpokenText)
+        voice.falarEstado("scene_approach","car","DANGER",VoicePriority.SAFETY)
+        voice.forcarPrioritario("cancelado2","PARADO2",VoicePriority.CONTROL)
+        assertEquals("DANGER",tts.lastSpokenText)
+    }
+    @Test fun speakingCallbackLetsTheMicrophoneCloseBeforeSpeech() {
+        val events = mutableListOf<Boolean>()
+        voice.onSpeakingChanged = { events += it }
+        voice.falarEstado("crossing_stage","AWAIT_RIGHT","APONTE DIREITA")
+        assertTrue(voice.ocupado)
+        shadowOf(Looper.getMainLooper()).idle()
+        // "true" sempre precede a fala; o TTS simulado conclui sozinho, então "false" pode já ter chegado.
+        assertEquals(true,events.first())
+        voice.interromper(preserveSafety = false)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(voice.ocupado)
+        assertEquals(false,events.last())
+    }
 }

@@ -18,7 +18,6 @@ import com.travessia.segura.config.LanguageManager
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var config: AppConfig
-    private lateinit var x5Config: com.travessia.segura.camera.X5CameraConfig
     private lateinit var container: LinearLayout
 
     private val dp: Float
@@ -32,7 +31,6 @@ class SettingsActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         config = AppConfig(this)
-        x5Config = com.travessia.segura.camera.X5CameraConfig(this)
 
         val scrollView = ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#050B18"))
@@ -84,6 +82,7 @@ class SettingsActivity : AppCompatActivity() {
         addSwitch(roadText("debug"), config.roadDebugOverlay) { config.roadDebugOverlay = it }
         addSliderInt(roadText("seg_fps"), config.roadSegmentationFps, 1, 5) { config.roadSegmentationFps = it }
         addSliderInt(roadText("yolo_fps"), config.roadYoloFps, 1, 30) { config.roadYoloFps = it }
+        addCameraSourceSpinner()
         addSpinnerInt(roadText("capture_width"), config.captureWidth, listOf(640,960,1280)) { config.captureWidth = it }
         addSliderInt(roadText("confirm"), config.roadConfirmationMs, 500, 5000) { config.roadConfirmationMs = it }
         addSliderInt(roadText("hold"), config.roadHoldMs, 5000, 60000) { config.roadHoldMs = it }
@@ -112,18 +111,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         addSwitch(tr("settings_show_bottom_panel"), config.mostrarPainelInferior) {
             config.mostrarPainelInferior = it
-        }
-
-        addSection("X5 RTSP", roadText("x5_setup"))
-        addTextInput("X5 SSID", x5Config.ssid) { x5Config.ssid = it }
-        addTextInput("X5 IP", x5Config.controlHost) { x5Config.controlHost = it }
-        addTextInput(roadText("x5_port"), x5Config.controlPort.toString()) {
-            it.toIntOrNull()?.let { port -> x5Config.controlPort = port }
-        }
-        addTextInput(roadText("x5_url"), x5Config.fallbackRtspUrl) { x5Config.fallbackRtspUrl = it }
-        addSwitch(roadText("x5_rotate"), x5Config.rotate180) { x5Config.rotate180 = it }
-        addTextInput(roadText("x5_age"), x5Config.staleFrameMs.toString()) {
-            it.toLongOrNull()?.let { ms -> x5Config.staleFrameMs = ms }
         }
 
         addSection(tr("settings_ai_section"), tr("settings_ai_subtitle"))
@@ -287,6 +274,31 @@ class SettingsActivity : AppCompatActivity() {
                 setPadding(0, 0, 0, dpInt(8))
             })
         }
+    }
+
+    /** Fonte da câmera (antes era um botão na tela principal): celular ou webcam USB/UVC. */
+    private fun addCameraSourceSpinner() {
+        val labels = listOf(tr("source_local"), "USB / UVC")
+        val values = listOf(0, 2)
+        val box = controlBox()
+        box.addView(TextView(this).apply {
+            text = tr("accessibility_source")
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, dpInt(8))
+        })
+        box.addView(Spinner(this).apply {
+            contentDescription = tr("accessibility_source")
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, labels)
+            setSelection(values.indexOf(config.cameraSource).coerceAtLeast(0))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    config.cameraSource = values[position]
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
+        })
+        container.addView(box)
     }
 
     private fun addLanguageSpinner() {

@@ -49,4 +49,20 @@ class VoiceCommandValidationTest {
         for (s in listOf("câmera posicionada", "camera ready", "cámara lista"))
             assertEquals(VoiceCommandController.Command.CONFIRM_DIRECTION,parse(s))
     }
+    @Test fun guidedSequenceCommandsInAllLanguages() {
+        val c = VoiceCommandController.Command.CONFIRM_DIRECTION
+        for (t in listOf("pronto","Pronto!","ready","done","listo")) assertEquals(t,c,parse(t))
+        for (t in listOf("continuar","continue","próximo","siguiente")) assertEquals(t,VoiceCommandController.Command.CONTINUE,parse(t))
+        for (t in listOf("repetir","repita","repeat","repite")) assertEquals(t,VoiceCommandController.Command.REPEAT,parse(t))
+        for (t in listOf("cancelar","cancel")) assertEquals(t,VoiceCommandController.Command.CANCEL,parse(t))
+        for (t in listOf("analisar novamente","analyze again","analizar de nuevo")) assertEquals(t,VoiceCommandController.Command.RESTART,parse(t))
+        for (t in listOf("iniciar análise","start analysis","comenzar")) assertEquals(t,VoiceCommandController.Command.START,parse(t))
+        for (t in listOf("parar","pare","stop","detener")) assertEquals(t,VoiceCommandController.Command.STOP,parse(t))
+    }
+    @Test fun stopWinsOverGuidanceCommandsAndNegationBlocksThem() {
+        assertEquals(VoiceCommandController.Command.STOP,parse("pronto parar"))
+        assertEquals(VoiceCommandController.Command.STOP,parse("cancelar e parar"))
+        assertEquals(VoiceCommandController.Command.UNKNOWN,parse("não continuar"))
+        assertEquals(VoiceCommandController.Command.UNKNOWN,parse("não cancelar"))
+    }
 }

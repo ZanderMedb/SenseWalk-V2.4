@@ -1,0 +1,3 @@
+camerax_limpo: total=15600ms por_direcao=[5100, 5100, 5100] frames=52 verificacoes_longas=0 instrucoes=3 final=INCONCLUSIVE
+camerax_ruido_30pct: total=21900ms por_direcao=[9600, 5400, 6600] frames=73 verificacoes_longas=2 instrucoes=3 final=INCONCLUSIVE
+usb_sem_sensor: total=16500ms por_direcao=[5400, 5400, 5400] frames=55 verificacoes_longas=0 instrucoes=3 final=INCONCLUSIVE

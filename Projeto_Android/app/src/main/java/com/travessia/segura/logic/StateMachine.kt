@@ -25,6 +25,8 @@ class StateMachine(
     private val tracker: Rastreador
 ) {
     companion object {
+        /** Desligado enquanto a detecção de faixa não é confiável (somente fala; detecção preservada). */
+        const val CROSSWALK_ROUTINE_SPEECH = false
         private const val TAG = "StateMachine"
         // Confirma persistência da observação; não comprova segurança da via.
         private const val TEMPO_CONFIRMAR_LIVRE_S = 3.0
@@ -178,7 +180,7 @@ class StateMachine(
                 entrarEstado(EST_SEMAFORO)
             }
             pf >= config.reconThreshold -> {
-                voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_recon_crosswalk"))
+                falarFaixa("scene_context",EST_FAIXA,config.tr("voice_recon_crosswalk"))
                 entrarEstado(EST_FAIXA)
             }
             else -> {
@@ -226,7 +228,8 @@ class StateMachine(
             if (tSemPerdido == null) tSemPerdido = agora
             if (agora - tSemPerdido!! > 4.0) {
                 if (faixaDet) {
-                    voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_light_lost_crosswalk"))
+                    // Sem menção à faixa: mesma mensagem de via (regra do semáforo inalterada).
+                    voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_light_lost_road"))
                     entrarEstado(EST_FAIXA)
                 } else {
                     voz.falarEstado("scene_context",EST_VIA_LIVRE,config.tr("voice_light_lost_road"))
@@ -261,7 +264,7 @@ class StateMachine(
         }
 
         // Tem carros em movimento
-        val temMovimento = veiculosReais.values.any { it.classif in setOf("APROXIMANDO","POTENCIAL_CONFLITO","EM_MOVIMENTO") } || nSemId > 0
+        val temMovimento = veiculosReais.values.any { it.classif in com.travessia.segura.tracking.MotionClass.MOVING } || nSemId > 0
         if (temMovimento) {
             tViaLimpa = null
             situacaoAtual = "AGUARDE"
@@ -271,7 +274,7 @@ class StateMachine(
 
         // Todos parados
         val todosParados = veiculosReais.values.all {
-            it.classif == "PARADO" && tracker.historicoOk(it.tid)
+            com.travessia.segura.tracking.MotionClass.isStopped(it.classif) && tracker.historicoOk(it.tid)
         }
         if (todosParados) {
             iniciarConfirmacao("stopped",agora)
@@ -315,17 +318,17 @@ class StateMachine(
             val (dir, intens) = config.calcularAlinhamentoFaixa(faixaCx, wf)
             when (dir) {
                 "ESQUERDA" -> {
-                    voz.falarEstado("scene_alignment","left_${intens > 0.35f}",
+                    falarFaixa("scene_alignment","left_${intens > 0.35f}",
                         if (intens > 0.35f) config.tr("voice_turn_left_strong") else config.tr("voice_turn_left_light"),settleMs=1200)
                     faixaAlinhada = false
                 }
                 "DIREITA" -> {
-                    voz.falarEstado("scene_alignment","right_${intens > 0.35f}",
+                    falarFaixa("scene_alignment","right_${intens > 0.35f}",
                         if (intens > 0.35f) config.tr("voice_turn_right_strong") else config.tr("voice_turn_right_light"),settleMs=1200)
                     faixaAlinhada = false
                 }
                 "ALINHADO" -> {
-                    voz.falarEstado("scene_alignment","aligned",config.tr("voice_aligned_crosswalk"),settleMs=1200)
+                    falarFaixa("scene_alignment","aligned",config.tr("voice_aligned_crosswalk"),settleMs=1200)
                     faixaAlinhada = true
                 }
             }
@@ -337,10 +340,11 @@ class StateMachine(
         // Lógica de veículos
         processarLogicaVeiculos(
             veiculosReais, nSemId,
-            msgLivre      = config.tr("voice_crosswalk_clear"),
-            msgAguarde    = config.tr("voice_crosswalk_wait"),
+            // Mensagens de veículos sem referência à faixa (detecção da faixa inalterada).
+            msgLivre      = config.tr("voice_road_clear"),
+            msgAguarde    = config.tr("voice_road_wait"),
             msgParando    = config.tr("voice_vehicles_stopping"),
-            msgPodePassar = config.tr("voice_crosswalk_vehicles_stopped")
+            msgPodePassar = config.tr("voice_road_vehicles_stopped")
         )
 
     }
@@ -368,7 +372,7 @@ class StateMachine(
         upgradeFaixaCount = if (faixaDet) upgradeFaixaCount + 1
         else maxOf(0, upgradeFaixaCount - 1)
         if (upgradeFaixaCount >= config.upgradeFrames) {
-            voz.falarEstado("scene_context",EST_FAIXA,config.tr("voice_recon_crosswalk"))
+            falarFaixa("scene_context",EST_FAIXA,config.tr("voice_recon_crosswalk"))
             entrarEstado(EST_FAIXA)
             return
         }
@@ -424,7 +428,7 @@ class StateMachine(
             return
         }
 
-        val temMovimento = veiculosReais.values.any { it.classif in setOf("APROXIMANDO","POTENCIAL_CONFLITO","EM_MOVIMENTO") } || nSemId > 0
+        val temMovimento = veiculosReais.values.any { it.classif in com.travessia.segura.tracking.MotionClass.MOVING } || nSemId > 0
 
         if (temMovimento) {
             // Carro em movimento — resetar, não pode passar
@@ -436,7 +440,7 @@ class StateMachine(
             // Todos parados (com histórico ok)
             val todosParados = veiculosReais.values.isNotEmpty() &&
                     veiculosReais.values.all {
-                        it.classif == "PARADO" && tracker.historicoOk(it.tid)
+                        com.travessia.segura.tracking.MotionClass.isStopped(it.classif) && tracker.historicoOk(it.tid)
                     }
 
             if (todosParados) {
@@ -473,6 +477,16 @@ class StateMachine(
     private fun iniciarConfirmacao(tipo: String, agora: Double) {
         if (tViaLimpa == null || tipoConfirmacao != tipo) tViaLimpa = agora
         tipoConfirmacao = tipo
+    }
+
+    /**
+     * Falas rotineiras sobre presença/alinhamento de faixa ficam desligadas: a detecção `crosswalk`
+     * do YOLO ainda é instável. A detecção, boxes, logs e estados continuam; só a fala é silenciada.
+     * Alertas de perigo (ex.: veículo no caminho) não passam por aqui.
+     */
+    private fun falarFaixa(topic: String, state: String, text: String, settleMs: Long = 0) {
+        if (CROSSWALK_ROUTINE_SPEECH) voz.falarEstado(topic, state, text, settleMs = settleMs)
+        else voz.observarEstado(topic, state, settleMs)
     }
 
     private fun now(): Double = android.os.SystemClock.elapsedRealtime() / 1000.0

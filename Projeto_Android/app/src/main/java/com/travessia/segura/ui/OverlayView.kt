@@ -148,6 +148,80 @@ class OverlayView @JvmOverloads constructor(
     /**
      * Limpa todas as caixas da tela.
      */
+    // ══════════════════════════════════════════
+    //  DEPURAÇÃO DO GIRO (ponto + rastro)
+    // ══════════════════════════════════════════
+    private data class YawPoint(val yaw: Float?, val tMs: Long, val covered: Boolean)
+    private val yawTrail = ArrayDeque<YawPoint>()
+    private var yawLabel = ""
+    private var yawLateralMin = 45f; private var yawLateralMax = 135f; private var yawFrontTol = 20f
+    private val yawPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /** Giro relativo à frente (graus; direita positiva). null = desconhecido. Mostrado só no modo desenvolvedor. */
+    fun updateYawDebug(yawDeg: Float?, covered: Boolean, label: String, lateralMin: Float, lateralMax: Float, frontTol: Float) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        yawTrail.addLast(YawPoint(yawDeg, now, covered))
+        while (yawTrail.isNotEmpty() && now - yawTrail.first().tMs > 6000) yawTrail.removeFirst()
+        yawLabel = label; yawLateralMin = lateralMin; yawLateralMax = lateralMax; yawFrontTol = frontTol
+        postInvalidate()
+    }
+    fun clearYawDebug() { yawTrail.clear(); yawLabel = ""; postInvalidate() }
+
+    /** Etiqueta "para onde estou olhando" (sempre visível na análise). Verde = bate com a direção pedida. */
+    private var lookTag = ""
+    private var lookTagMatches = false
+    fun updateLookTag(text: String, matchesRequested: Boolean) {
+        if (text == lookTag && matchesRequested == lookTagMatches) return
+        lookTag = text; lookTagMatches = matchesRequested; postInvalidate()
+    }
+    private val lookPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 44f; isFakeBoldText = true; textAlign = Paint.Align.CENTER }
+    private val lookBgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private fun drawLookTag(canvas: Canvas, vw: Float, vh: Float) {
+        if (lookTag.isEmpty()) return
+        val y = vh * .30f
+        val w = lookPaint.measureText(lookTag) + 48f
+        lookBgPaint.color = if (lookTagMatches) Color.argb(200, 46, 125, 50) else Color.argb(200, 33, 33, 33)
+        canvas.drawRoundRect(vw / 2 - w / 2, y - 50f, vw / 2 + w / 2, y + 16f, 18f, 18f, lookBgPaint)
+        lookPaint.color = if (lookTagMatches) Color.WHITE else Color.rgb(255, 213, 79)
+        canvas.drawText(lookTag, vw / 2, y, lookPaint)
+    }
+
+    private fun drawYawDebug(canvas: Canvas, vw: Float, vh: Float) {
+        if (yawTrail.isEmpty()) return
+        val left = vw * .08f; val right = vw * .92f; val barY = vh * .16f
+        fun x(yaw: Float) = left + (yaw.coerceIn(-150f, 150f) + 150f) / 300f * (right - left)
+        // Faixas-alvo: esquerda (azul), frente (branco), direita (azul).
+        yawPaint.style = Paint.Style.FILL
+        yawPaint.color = Color.argb(70, 33, 150, 243)
+        canvas.drawRect(x(-yawLateralMax), barY - 14f, x(-yawLateralMin), barY + 14f, yawPaint)
+        canvas.drawRect(x(yawLateralMin), barY - 14f, x(yawLateralMax), barY + 14f, yawPaint)
+        yawPaint.color = Color.argb(70, 255, 255, 255)
+        canvas.drawRect(x(-yawFrontTol), barY - 14f, x(yawFrontTol), barY + 14f, yawPaint)
+        yawPaint.color = Color.argb(160, 255, 255, 255); yawPaint.strokeWidth = 2f
+        canvas.drawLine(left, barY, right, barY, yawPaint)
+        textPaint.textSize = 26f
+        canvas.drawText("E", x(-90f) - 8f, barY - 20f, textPaint)
+        canvas.drawText("F", x(0f) - 8f, barY - 20f, textPaint)
+        canvas.drawText("D", x(90f) - 8f, barY - 20f, textPaint)
+        // Rastro: o mais novo na barra, os mais antigos escorrendo para baixo ("pinta" o caminho do giro).
+        val now = android.os.SystemClock.elapsedRealtime()
+        var prev: Pair<Float, Float>? = null
+        for (p in yawTrail) {
+            val age = (now - p.tMs) / 6000f
+            val y = barY + age * vh * .5f
+            if (p.yaw == null) { prev = null; continue }
+            val px = x(p.yaw)
+            yawPaint.color = if (p.covered) Color.argb((220 * (1 - age)).toInt().coerceAtLeast(30), 76, 175, 80)
+                else Color.argb((220 * (1 - age)).toInt().coerceAtLeast(30), 255, 193, 7)
+            prev?.let { canvas.drawLine(it.first, it.second, px, y, yawPaint.apply { strokeWidth = 5f }) }
+            prev = px to y
+        }
+        val last = yawTrail.last()
+        yawPaint.color = when { last.yaw == null -> Color.GRAY; last.covered -> Color.rgb(76, 175, 80); else -> Color.rgb(255, 193, 7) }
+        canvas.drawCircle(x(last.yaw ?: 0f), barY, 16f, yawPaint)
+        canvas.drawText(yawLabel, left, barY + 44f, textPaint)
+    }
+
     fun clear() {
         this.boxes = emptyList()
         roadMask?.recycle(); roadMask = null; roadMetrics = ""
@@ -185,6 +259,8 @@ class OverlayView @JvmOverloads constructor(
         val vh = height.toFloat()
 
         if (vw <= 0f || vh <= 0f) return
+        drawYawDebug(canvas, vw, vh)
+        drawLookTag(canvas, vw, vh)
         roadMask?.let { mask ->
             val scale = maxOf(vw / roadWidth, vh / roadHeight)
             val w = roadWidth * scale; val h = roadHeight * scale

@@ -85,7 +85,8 @@
                 <Button
                     android:id="@+id/btnPortuguese"
                     android:layout_width="match_parent"
-                    android:layout_height="52dp"
+                    android:layout_height="wrap_content"
+                android:minHeight="52dp"
                     android:layout_marginTop="10dp"
                     android:background="@drawable/bg_button_primary"
                     android:text="Português"
@@ -97,7 +98,8 @@
                 <Button
                     android:id="@+id/btnEnglish"
                     android:layout_width="match_parent"
-                    android:layout_height="52dp"
+                    android:layout_height="wrap_content"
+                android:minHeight="52dp"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_button_secondary"
                     android:text="English"
@@ -108,7 +110,8 @@
                 <Button
                     android:id="@+id/btnSpanish"
                     android:layout_width="match_parent"
-                    android:layout_height="52dp"
+                    android:layout_height="wrap_content"
+                android:minHeight="52dp"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_button_secondary"
                     android:text="Español"
@@ -119,7 +122,8 @@
                 <Button
                     android:id="@+id/btnVoiceLanguage"
                     android:layout_width="match_parent"
-                    android:layout_height="52dp"
+                    android:layout_height="wrap_content"
+                android:minHeight="52dp"
                     android:layout_marginTop="12dp"
                     android:background="@drawable/bg_button_secondary"
                     android:text="Selecionar por voz"
@@ -153,7 +157,8 @@
                 <Button
                     android:id="@+id/btnContinue"
                     android:layout_width="match_parent"
-                    android:layout_height="56dp"
+                    android:layout_height="wrap_content"
+                android:minHeight="56dp"
                     android:layout_marginTop="16dp"
                     android:background="@drawable/bg_button_primary"
                     android:text="Entrar no app"

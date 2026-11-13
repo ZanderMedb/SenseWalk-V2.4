@@ -33,22 +33,33 @@ object CrossingRiskAnalyzer {
             val obstacle = corridor && b[3] / h >= .78f && v.bboxW / w >= .23f
             // A câmera lateral não tem o mesmo corredor central da vista frontal.
             // Fora da caixa da faixa não equivale a fora de uma trajetória futura.
-            val conflict = v.classif == "APROXIMANDO"
+            val conflict = v.classif == com.travessia.segura.tracking.MotionClass.APROXIMANDO
             val projectedConflict = crosswalk != null && v.trajectory?.mayIntersect(b,
-                floatArrayOf(crosswalk.x1,crosswalk.y1,crosswalk.x2,crosswalk.y2)) == true && v.classif != "PARADO"
-            if (v.classif == "POTENCIAL_CONFLITO" || projectedConflict) reasons += RiskReason.POTENTIAL_TRAFFIC_CONFLICT
+                floatArrayOf(crosswalk.x1,crosswalk.y1,crosswalk.x2,crosswalk.y2)) == true && !com.travessia.segura.tracking.MotionClass.isStopped(v.classif)
+            // Veículo pequeno e distante (alto na imagem), sem expansão da caixa: o "conflito" é muito provavelmente
+            // ruído de compensação; vira INCERTEZA (bloqueia conclusões) em vez de alerta de perigo.
+            // Carro pequeno mas RÁPIDO (>= 1,5 largura/s) continua sendo alerta.
+            val distantSmall = v.bboxW / w < .05f && b[3] / h < .55f && (v.trajectory?.growthPerSecond ?: 0f) < .14f &&
+                v.vel < 1.5f * v.bboxW
+            if ((v.classif in com.travessia.segura.tracking.MotionClass.CONFLICT || projectedConflict) && !distantSmall)
+                reasons += RiskReason.POTENTIAL_TRAFFIC_CONFLICT
+            if (v.classif in com.travessia.segura.tracking.MotionClass.CONFLICT && distantSmall) reasons += RiskReason.MOTION_UNCERTAIN
             if (occupied) reasons += RiskReason.CROSSWALK_OCCUPIED
             if (obstacle) reasons += RiskReason.OBSTACLE_AHEAD
             if (conflict) reasons += RiskReason.CONFLICTING_APPROACH
             if (corridor && v.classif == "MOVIMENTO_INCERTO" &&
                 v.bboxW / w >= .12f && b[3] / h >= .65f && !obstacle && !occupied)
                 reasons += RiskReason.POTENTIAL_TRAFFIC_CONFLICT
-            if (v.classif == "MOVIMENTO_INCERTO" || v.classif == "EM_MOVIMENTO" || v.classif == "POTENCIAL_CONFLITO")
+            // Inclui POSSIVEL_AFASTAMENTO: retração não é prova de afastamento seguro.
+            if (v.classif in com.travessia.segura.tracking.MotionClass.UNCERTAIN)
                 reasons += RiskReason.MOTION_UNCERTAIN
             VehicleMotionAssessment(v.tid, v.classif, corridor, obstacle, conflict)
         }
         return CrossingRiskAssessment(reasons, assessed,
-            SceneConfidence(frameAgeMs in 0..1500, cameraReliable && RiskReason.MOTION_UNCERTAIN !in reasons,
+            // Sem veículo visível nem perdido (TRACK_LOST), não há movimento de veículo a compensar: a estimativa
+            // do movimento da câmera (que falha à noite/rua escura) não é exigida para um quadro "limpo".
+            SceneConfidence(frameAgeMs in 0..1500,
+                (cameraReliable || (vehicles.isEmpty() && unobservedVehicles == 0)) && RiskReason.MOTION_UNCERTAIN !in reasons,
                 coverageVerified, frameAgeMs))
     }
 }

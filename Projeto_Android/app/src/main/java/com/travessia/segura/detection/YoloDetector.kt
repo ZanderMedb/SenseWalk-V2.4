@@ -38,6 +38,10 @@ class YoloDetector(
 
     private lateinit var inputBuffer: ByteBuffer
     private lateinit var inputPixels: IntArray
+    private lateinit var inputFloats: FloatArray
+    /** Canvas 640x640 reutilizado no letterbox (mesmo resultado, sem alocar 1,6 MB por frame). */
+    private var paddedBitmap: Bitmap? = null
+    private var paddedCanvas: Canvas? = null
     private lateinit var outputBuffer: Array<Array<FloatArray>>
 
     private var outputTransposed = true
@@ -97,6 +101,7 @@ class YoloDetector(
                 order(ByteOrder.nativeOrder())
             }
             inputPixels = IntArray(inputSize * inputSize)
+            inputFloats = FloatArray(inputSize * inputSize * 3)
             Log.i(TAG, "Input buffer: $inputBytes bytes (${inputSize}x${inputSize}x3xFLOAT32)")
 
             val outputTensor = interp.getOutputTensor(0)
@@ -205,6 +210,7 @@ class YoloDetector(
 
         inferenceCount++
         val startTime = android.os.SystemClock.elapsedRealtime()
+        val startNanos = android.os.SystemClock.elapsedRealtimeNanos()
 
         val rotated = if (rotationDegrees != 0) {
             val matrix = Matrix()
@@ -221,13 +227,17 @@ class YoloDetector(
 
         preencherInput(letterboxed)
 
-        if (letterboxed !== rotated) letterboxed.recycle()
+        if (letterboxed !== rotated && letterboxed !== paddedBitmap) letterboxed.recycle()
         if (rotated !== bitmap) rotated.recycle()
+        val preDone = android.os.SystemClock.elapsedRealtimeNanos()
+        com.travessia.segura.benchmark.Perf.stats.record("yolo_pre_ms", (preDone - startNanos) / 1e6f)
 
         try {
             synchronized(inferenceLock) {
                 interp.run(inputBuffer, outputBuffer)
             }
+            com.travessia.segura.benchmark.Perf.stats.record("yolo_infer_ms",
+                (android.os.SystemClock.elapsedRealtimeNanos() - preDone) / 1e6f)
         } catch (e: Exception) {
             Log.e(TAG, "Erro na inferência: ${e.message}", e)
             throw IllegalStateException("Falha YOLO: resultado inválido", e)
@@ -244,8 +254,12 @@ class YoloDetector(
             logDiagnostico(output, "Frame #$inferenceCount")
         }
 
+        val postStart = android.os.SystemClock.elapsedRealtimeNanos()
         val deteccoes = parsearOutput(output, confMinima, origW, origH)
         val resultado = nms(deteccoes, 0.45f)
+        com.travessia.segura.benchmark.Perf.stats.record("yolo_post_ms",
+            (android.os.SystemClock.elapsedRealtimeNanos() - postStart) / 1e6f)
+        com.travessia.segura.benchmark.Perf.stats.count("yolo_frames")
 
         val elapsed = android.os.SystemClock.elapsedRealtime() - startTime
         lastInferenceTimeMs = elapsed
@@ -388,8 +402,10 @@ class YoloDetector(
 
         val resized = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
 
-        val padded = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(padded)
+        // Reutiliza o destino; recriado se alguém o reciclou. Pixels idênticos à versão anterior.
+        val padded = paddedBitmap?.takeIf { !it.isRecycled && it.width == inputSize } ?: Bitmap.createBitmap(
+            inputSize, inputSize, Bitmap.Config.ARGB_8888).also { paddedBitmap = it; paddedCanvas = Canvas(it) }
+        val canvas = paddedCanvas ?: Canvas(padded).also { paddedCanvas = it }
         canvas.drawColor(Color.rgb(114, 114, 114))
         canvas.drawBitmap(resized, padW, padH, null)
 
@@ -406,11 +422,15 @@ class YoloDetector(
         val pixels = inputPixels
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
+        // Mesmos valores (RGB/255), escritos em bloco em vez de 1,2 milhão de putFloat.
+        val floats = inputFloats
+        var i = 0
         for (pixel in pixels) {
-            inputBuffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f)
-            inputBuffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
-            inputBuffer.putFloat((pixel and 0xFF) / 255.0f)
+            floats[i++] = ((pixel shr 16) and 0xFF) / 255.0f
+            floats[i++] = ((pixel shr 8) and 0xFF) / 255.0f
+            floats[i++] = (pixel and 0xFF) / 255.0f
         }
+        inputBuffer.asFloatBuffer().put(floats)
         inputBuffer.rewind()
     }
 

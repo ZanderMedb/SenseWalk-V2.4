@@ -33,7 +33,11 @@ class SparseOpticalFlowEstimator(
         val rotationDegrees: Float = 0f,
         val scale: Float = 1f,
         val backgroundResidual: Float = Float.POSITIVE_INFINITY,
-        val translationSupported: Boolean = false
+        val translationSupported: Boolean = false,
+        /** Fundo coerente com giro/escala pequenos (similaridade). */
+        val similaritySupported: Boolean = false,
+        val parallaxSuspected: Boolean = false,
+        val model: String = "INSUFFICIENT"
     ) {
         val magnitude: Float get() = hypot(dx, dy)
     }
@@ -133,7 +137,10 @@ class SparseOpticalFlowEstimator(
                 vectorsX[i].toFloat(),vectorsY[i].toFloat())
         }, sampled.width, sampled.height)
         val translationSupported = fit?.translationSupported == true
-        val confidence = (inlierRatio * pointFactor * if (covered >= 3 && translationSupported) 1f else 0f).coerceIn(0f, 1f)
+        // Similaridade com giro/escala pequenos ainda permite compensação aproximada; acima disso, rejeitar.
+        val compensable = translationSupported || (fit?.similaritySupported == true &&
+            abs(fit.scale - 1f) <= .04f && abs(fit.rotationDegrees) <= 1.5f)
+        val confidence = (inlierRatio * pointFactor * if (covered >= 3 && compensable) 1f else 0f).coerceIn(0f, 1f)
 
         return MotionEstimate(
             dx = rotated.first,
@@ -144,7 +151,10 @@ class SparseOpticalFlowEstimator(
             rotationDegrees = fit?.rotationDegrees ?: 0f,
             scale = fit?.scale ?: 1f,
             backgroundResidual = fit?.residual ?: Float.POSITIVE_INFINITY,
-            translationSupported = translationSupported
+            translationSupported = translationSupported,
+            similaritySupported = fit?.similaritySupported == true,
+            parallaxSuspected = fit?.parallaxSuspected == true,
+            model = fit?.model?.name ?: "INSUFFICIENT"
         )
     }
 

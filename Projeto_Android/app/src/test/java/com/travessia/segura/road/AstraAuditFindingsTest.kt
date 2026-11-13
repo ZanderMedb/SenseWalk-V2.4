@@ -23,8 +23,13 @@ class AstraAuditFindingsTest {
         val c = CrossingVerification()
         c.start(1000); c.observe(clear,scene(1100),road(1100),1100)
         window(c,2000,clear.copy(confidence=SceneConfidence(true,true,false)))
+        // Não verificada, mas o usuário não fica preso: segue para a esquerda sem voltar à direita.
+        assertEquals(CrossingVerification.DirectionStatus.COVERAGE_INCONCLUSIVE,c.status(CrossingVerification.Direction.RIGHT))
+        assertTrue(c.cannotVerifyDirection)
+        assertEquals(CrossingVerification.Stage.AWAIT_LEFT,c.stage)
+        window(c,4000); window(c,6000)
         assertEquals(CrossingVerification.Stage.INCONCLUSIVE,c.stage)
-        c.observe(clear,scene(4000),road(4000),4000)
+        c.observe(clear,scene(9000),road(9000),9000)
         assertEquals(CrossingVerification.Stage.INCONCLUSIVE,c.stage)
     }
 
@@ -54,15 +59,28 @@ class AstraAuditFindingsTest {
         assertEquals(CrossingVerification.Stage.INCONCLUSIVE,c.stage)
     }
 
-    @Test fun roadAgeMustIncludeCurrentInferenceLatency() {
+    /** Antes: idade da máscara FFNet. A FFNet não decide mais a travessia; a latência continua contando
+     *  na expiração das evidências laterais do YOLO. */
+    @Test fun sideEvidenceAgeMustIncludeCurrentInferenceLatency() {
         val c = CrossingVerification()
         c.start(1000); c.observe(clear,scene(1100),road(1100),1100)
         window(c,2000); window(c,4000)
-        c.confirmCameraDirection(6000)
+        c.confirmCameraDirection(14000)
         val delayed = CrossingRiskAnalyzer.analyze(emptyList(),640,360,
             frameAgeMs=1400,coverageVerified=true,cameraReliable=true)
-        // Contexto 500 ms anterior à captura + 1400 ms até a decisão = 1900 ms.
-        for (t in 6000L..7500L step 500) c.observe(delayed,scene(t),road(t-500),t)
+        // Direita registrada em 3500. Captura em 15500 -> 12000 ms (válido); decisão em 16900 -> expirado.
+        for (t in 14000L..15500L step 500) c.observe(delayed,scene(t),null,t)
         assertEquals(CrossingVerification.Stage.INCONCLUSIVE,c.stage)
+    }
+
+    @Test fun ffnetMaskIsNotRequiredForTheGuidedSequence() {
+        val c = CrossingVerification()
+        c.start(1000); c.observe(clear,scene(1100),null,1100)
+        for (start in listOf(2000L,4000L,6000L)) {
+            c.confirmCameraDirection(start)
+            for (t in start..start+1500 step 500) c.observe(clear,scene(t),null,t)
+        }
+        // Sintético com cobertura atestada: a ausência de máscara FFNet não bloqueia o YOLO.
+        assertEquals(CrossingVerification.Stage.FAVORABLE_OBSERVATION,c.stage)
     }
 }

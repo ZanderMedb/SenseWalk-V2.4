@@ -3,6 +3,8 @@ package com.travessia.segura.voice
 enum class VoicePriority(val weight: Int) {
     INFO(10),
     CROSSING(60),
+    /** Parar/Cancelar: acima das instruções, abaixo dos alertas de perigo. */
+    CONTROL(80),
     SAFETY(100)
 }
 

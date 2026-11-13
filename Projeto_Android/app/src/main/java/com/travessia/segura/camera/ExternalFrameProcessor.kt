@@ -29,7 +29,10 @@ class ExternalFrameProcessor(
     private val onStatusUpdate: (String, String, Int, String, Long, Long?) -> Unit,
     private val onOverlayUpdate: (List<OverlayView.BoxInfo>, Int, Int, Int, Long, Long?) -> Unit,
     private val coordinator: com.travessia.segura.road.InferenceCoordinator? = null,
-    private val crossing: CrossingVerification? = null
+    private val crossing: CrossingVerification? = null,
+    private val sessionMemory: com.travessia.segura.tracking.CrossingSessionMemory? = null,
+    /** Webcam USB: orientação ESTIMADA pela imagem (VisualYawEstimator), alimentada no recebimento dos quadros. */
+    private val orientation: com.travessia.segura.orientation.OrientationCoverageTracker? = null
 ) {
     companion object {
         private const val TAG = "ExternalFrameProcessor"
@@ -42,6 +45,7 @@ class ExternalFrameProcessor(
     private var pipelineToken: Long? = null
 
     fun processarFrame(bitmap: Bitmap, overlayRotation: Int = 0, capturedAtMs: Long = SystemClock.elapsedRealtime()) {
+        com.travessia.segura.benchmark.Perf.stats.count("external_frames")
         if ((stateMachine.estado == AppConfig.EST_INATIVO && coordinator?.running != true) || !detector.isReady) return
         try {
             if (coordinator != null) coordinator.process(bitmap, 0, capturedAtMs) { processarInterno(bitmap, overlayRotation, capturedAtMs) }
@@ -56,7 +60,7 @@ class ExternalFrameProcessor(
     private fun processarInterno(bitmap: Bitmap, overlayRotation: Int, capturedAtMs: Long) {
         val token = coordinator?.resultToken
         if (token != pipelineToken) { resetar(); pipelineToken = token }
-        if (SystemClock.elapsedRealtime() - capturedAtMs !in 0..1500) { crossing?.invalidate(); coordinator?.reportStaleResult(); return }
+        if (SystemClock.elapsedRealtime() - capturedAtMs !in 0..1500) { crossing?.degrade(); coordinator?.reportStaleResult(); return }
         val frameStarted = SystemClock.elapsedRealtimeNanos()
         frameCount++
         val timestampMs = System.currentTimeMillis()
@@ -64,17 +68,23 @@ class ExternalFrameProcessor(
         val wf = bitmap.width
         val hf = bitmap.height
 
-        val motion = if (config.opticalFlowEnabled) {
+        val flowMotion = if (config.opticalFlowEnabled) {
             opticalFlow.estimate(bitmap, 0, previousVehicles)
         } else {
             SparseOpticalFlowEstimator.MotionEstimate()
         }
-        val useMotion = config.opticalFlowEnabled && motion.confidence >= config.opticalFlowMinConfidence
+        val flowOk = config.opticalFlowEnabled && flowMotion.confidence >= config.opticalFlowMinConfidence
+        // Giro visual parado (estimado em todos os quadros da webcam) substitui o fluxo quando ele falha.
+        val still = !flowOk && orientation?.isStillAt(capturedAtMs) == true
+        val motion = if (still) SparseOpticalFlowEstimator.MotionEstimate(dx = 0f, dy = 0f, confidence = 1f,
+            validPoints = flowMotion.validPoints, processingMs = flowMotion.processingMs, translationSupported = true,
+            similaritySupported = true, model = "VISUAL_STILL") else flowMotion
+        val useMotion = flowOk || still
         val appliedDx = if (useMotion) motion.dx else 0f
         val appliedDy = if (useMotion) motion.dy else 0f
 
         val rawDetections = detector.detectar(bitmap, config.confMinima, 0)
-        if (SystemClock.elapsedRealtime() - capturedAtMs !in 0..1500) { crossing?.invalidate(); coordinator?.reportStaleResult(); return }
+        if (SystemClock.elapsedRealtime() - capturedAtMs !in 0..1500) { crossing?.degrade(); coordinator?.reportStaleResult(); return }
         if (token != null && coordinator?.acceptsResult(token,capturedAtMs) != true) return
         val rawVeiculos = rawDetections.filter { config.categorizarClasse(it.className) == "veiculo" }
         previousVehicles = rawVeiculos.map { floatArrayOf(it.x1, it.y1, it.x2, it.y2) }
@@ -84,7 +94,8 @@ class ExternalFrameProcessor(
 
         vehicleTracker.configure(config.trackerCenterDistancePct, config.trackerGhostFrames)
         val trackedVehicles = vehicleTracker.update(rawVeiculos, wf, hf, appliedDx, appliedDy, capturedAtMs)
-        tracker.novoFrameCamera(motion.dx, motion.dy, motion.confidence, config.opticalFlowMinConfidence)
+        tracker.novoFrameCamera(motion.dx, motion.dy, motion.confidence, config.opticalFlowMinConfidence,
+            motion.scale, motion.rotationDegrees, motion.parallaxSuspected, capturedAtMs / 1000.0)
 
         if (frameCount % 30L == 0L) {
             val stats = vehicleTracker.lastStats
@@ -161,7 +172,20 @@ class ExternalFrameProcessor(
                 continue
             }
 
-            val (classif, vel) = tracker.classificar(tid, wf, hf)
+            // Estado bruto do Rastreador -> estado estabilizado na memória da sessão (3 observações, histerese;
+            // conflito/movimento relevante imediatos; câmera não compensada invalida "aparentemente parado").
+            val assessment = tracker.avaliar(tid, wf, hf)
+            val vel = assessment.speedPxS
+            val memStarted = SystemClock.elapsedRealtimeNanos()
+            val classif = sessionMemory?.observe(tid, det.className, floatArrayOf(det.x1, det.y1, det.x2, det.y2),
+                assessment.classification, assessment.confidence, capturedAtMs,
+                crossing?.coverageDirection?.let { com.travessia.segura.tracking.CrossingSessionMemory.Direction.valueOf(it.name) },
+                wf, hf, cameraMotionInvalid = !useMotion || tracker.cameraAndando())?.state ?: assessment.classification
+            com.travessia.segura.benchmark.Perf.stats.record("memory_ms", (SystemClock.elapsedRealtimeNanos() - memStarted) / 1e6f)
+            sessionMemory?.recordFor(tid)?.takeIf { it.lastTransitionMs == capturedAtMs }?.let { rec ->
+                Log.i("SenseWalkVeh", "id=$tid mem=${rec.memoryId} state=${rec.state} raw=${assessment.classification} " +
+                    "reason=${assessment.reason} w=${det.bboxW.toInt()}/$wf y2=${det.y2.toInt()}/$hf rel=${rec.relevance} dir=${rec.direction}")
+            }
             veiculos[tid] = VeiculoInfo(
                 nome = det.className,
                 conf = det.confidence,
@@ -176,9 +200,9 @@ class ExternalFrameProcessor(
             )
 
             val boxColor = when (classif) {
-                "APROXIMANDO", "POTENCIAL_CONFLITO" -> OverlayView.COLOR_APROXIMANDO
+                "APROXIMANDO", "POTENCIAL_CONFLITO", "POSSIVEL_APROXIMACAO" -> OverlayView.COLOR_APROXIMANDO
                 "EM_MOVIMENTO" -> OverlayView.COLOR_EM_MOVIMENTO
-                "MOVIMENTO_INCERTO" -> OverlayView.COLOR_OUTROS
+                "MOVIMENTO_INCERTO", "POSSIVEL_AFASTAMENTO" -> OverlayView.COLOR_OUTROS
                 else -> OverlayView.COLOR_PARADO
             }
             overlayBoxes?.add(
@@ -195,11 +219,19 @@ class ExternalFrameProcessor(
         if (token != null && coordinator?.acceptsResult(token,capturedAtMs) != true) return
         if (overlayBoxes != null) onOverlayUpdate(overlayBoxes, wf, hf, overlayRotation, capturedAtMs, token)
 
+        val coverageDirection = crossing?.coverageDirection
+        val coverage = if (orientation != null && coverageDirection != null)
+            orientation.evaluate(com.travessia.segura.orientation.OrientationCoverageTracker.Direction.valueOf(coverageDirection.name),
+                capturedAtMs) else null
         val risk = CrossingRiskAnalyzer.analyze(veiculos.values, wf, hf, scene.crosswalkBox,
             SystemClock.elapsedRealtime() - capturedAtMs,
-            coverageVerified = false, cameraReliable = useMotion,
-            unobservedVehicles = vehicleTracker.lastStats.unobservedTracks)
-        crossing?.observe(risk, scene, coordinator?.lastRoadResult, capturedAtMs, motion)
+            coverageVerified = coverage?.covered == true, cameraReliable = useMotion,
+            // Rastreio perdido só conta quando relevante (veículo grande ou perto). Carro minúsculo e distante
+            // que "pisca" na detecção não bloqueia a direção inteira; continua no histórico/overlay.
+            unobservedVehicles = trackedVehicles.count { it.isGhost && (it.bboxW >= wf * .05f || it.y2 >= hf * .55f) })
+        crossing?.observe(risk, scene, coordinator?.lastRoadResult, capturedAtMs, motion, wf,
+            wrongDirection = coverage?.status == com.travessia.segura.orientation.OrientationCoverageTracker.Status.WRONG_DIRECTION,
+            coverageAvailable = orientation != null && orientation.available && orientation.calibrated)
 
         stateMachine.processar(
             veiculosReais = veiculos,
@@ -249,6 +281,7 @@ class ExternalFrameProcessor(
     }
 
     fun resetar() {
+        sessionMemory?.clear()
         vehicleTracker.reset()
         tracker.resetar()
         opticalFlow.reset()

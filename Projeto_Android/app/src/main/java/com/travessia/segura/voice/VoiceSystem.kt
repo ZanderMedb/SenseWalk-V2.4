@@ -34,11 +34,20 @@ class VoiceSystem(
     private var currentMessage: ScheduledVoiceMessage? = null
     @Volatile private var speakRequestedAtMs = 0L
     @Volatile private var decisionAtMs = 0L
+    @Volatile private var utteranceStartedAtMs = 0L
     private var question: Pair<String, (Boolean) -> Unit>? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     var funcionando = false
         private set
+
+    /** true ao iniciar uma fala; false quando a fila esvazia. Usado para fechar/reabrir o microfone. */
+    @Volatile var onSpeakingChanged: ((Boolean) -> Unit)? = null
+    val ocupado: Boolean get() = falando.get() || fila.size() > 0
+    /** Uma fala de estado terminou com sucesso (tópico, valor). */
+    @Volatile var onStateSpoken: ((String, String) -> Unit)? = null
+    /** Um alerta de perigo está sendo falado agora. */
+    val alertaEmAndamento: Boolean get() = currentPriority == VoicePriority.SAFETY
 
     init {
         tts = TextToSpeech(context, this)
@@ -54,6 +63,12 @@ class VoiceSystem(
                 override fun onStart(id: String?)  {
                     if (id == currentUtteranceId) {
                         falando.set(true)
+                        utteranceStartedAtMs = android.os.SystemClock.elapsedRealtime()
+                        com.travessia.segura.benchmark.Perf.stats.record("tts_start_delay_ms",
+                            (utteranceStartedAtMs - speakRequestedAtMs).toFloat())
+                        if (decisionAtMs > 0L) com.travessia.segura.benchmark.Perf.stats.record(
+                            if (currentPriority == VoicePriority.SAFETY) "alert_decision_to_tts_ms" else "decision_to_tts_ms",
+                            (utteranceStartedAtMs - decisionAtMs).toFloat())
                         Log.d(TAG, "tts_start_delay_ms=${android.os.SystemClock.elapsedRealtime()-speakRequestedAtMs} priority=$currentPriority")
                         if (decisionAtMs > 0L) Log.d(TAG,
                             "decision_to_tts_start_ms=${android.os.SystemClock.elapsedRealtime()-decisionAtMs} priority=$currentPriority")
@@ -202,12 +217,20 @@ class VoiceSystem(
         currentMessage = mensagem
         decisionAtMs = mensagem.decisionElapsedMs
         speakRequestedAtMs = android.os.SystemClock.elapsedRealtime()
+        notifySpeaking(true)
         if (tts?.speak(mensagem.text, TextToSpeech.QUEUE_FLUSH, params, id) != TextToSpeech.SUCCESS) finishUtterance(id)
+    }
+
+    private fun notifySpeaking(speaking: Boolean) {
+        val listener = onSpeakingChanged ?: return
+        mainHandler.post { listener(speaking) }
     }
 
     @Synchronized private fun limpar() {
         fila.clear()
+        val wasSpeaking = falando.get()
         stopCurrent()
+        if (wasSpeaking) notifySpeaking(false)
     }
 
     private fun stopCurrent() {
@@ -220,13 +243,19 @@ class VoiceSystem(
 
     @Synchronized private fun finishUtterance(id: String?, success: Boolean = false) {
         if (id == null || id != currentUtteranceId) return
+        if (success && utteranceStartedAtMs > 0L) com.travessia.segura.benchmark.Perf.stats.record("tts_speech_ms",
+            (android.os.SystemClock.elapsedRealtime() - utteranceStartedAtMs).toFloat())
+        utteranceStartedAtMs = 0L
         val message = currentMessage
-        if (success && message?.stateTopic != null && message.stateValue != null)
+        if (success && message?.stateTopic != null && message.stateValue != null) {
             observedStates.markSpoken(message.stateTopic,message.stateValue)
+            onStateSpoken?.let { cb -> val t = message.stateTopic; val v = message.stateValue; mainHandler.post { cb(t, v) } }
+        }
         if (question?.first == id) completeQuestion(success)
         currentUtteranceId = null; currentPriority = null
         currentMessage = null
         falando.set(false); processarFila()
+        if (!falando.get()) notifySpeaking(false)
     }
 
     private fun completeQuestion(success: Boolean) {

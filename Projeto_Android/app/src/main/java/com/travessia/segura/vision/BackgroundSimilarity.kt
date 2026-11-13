@@ -8,9 +8,19 @@ import kotlin.math.*
  */
 object BackgroundSimilarity {
     data class Match(val x: Float, val y: Float, val dx: Float, val dy: Float)
+    enum class Model { TRANSLATION, SIMILARITY, PARALLAX_SUSPECTED, INCONSISTENT }
     data class Fit(val rotationDegrees: Float, val scale: Float, val residual: Float,
-        val inlierRatio: Float, val distortion: Float) {
-        val translationSupported: Boolean get() = inlierRatio >= .65f && residual <= 1f && distortion <= .75f
+        val inlierRatio: Float, val distortion: Float, val parallaxSuspected: Boolean = false) {
+        /** Fundo explicado só por translação (compensação atual exata o suficiente). */
+        val translationSupported: Boolean get() = inlierRatio >= .65f && residual <= 1f && distortion <= .75f && !parallaxSuspected
+        /** Fundo explicado por uma similaridade (giro/escala pequenos) de forma consistente. */
+        val similaritySupported: Boolean get() = inlierRatio >= .65f && residual <= 1f && !parallaxSuspected
+        val model: Model get() = when {
+            parallaxSuspected -> Model.PARALLAX_SUSPECTED
+            translationSupported -> Model.TRANSLATION
+            similaritySupported -> Model.SIMILARITY
+            else -> Model.INCONSISTENT
+        }
     }
     private data class Transform(val a: Double, val b: Double, val tx: Double, val ty: Double) {
         fun error(p: Match) = hypot(a*p.x-b*p.y+tx-p.x-p.dx,b*p.x+a*p.y+ty-p.y-p.dy)
@@ -41,8 +51,30 @@ object BackgroundSimilarity {
         if (norm < 100) return null
         val a = dot/norm; val b = cross/norm
         val t = Transform(a,b,u-a*x+b*y,v-b*x-a*y)
+        val inlierRatio = best.size.toFloat()/points.size
         return Fit(Math.toDegrees(atan2(b,a)).toFloat(),hypot(a,b).toFloat(),
-            sqrt(best.map { t.error(it).pow(2) }.average()).toFloat(),best.size.toFloat()/points.size,
-            (hypot(a-1,b)*hypot(width.toDouble(),height.toDouble())/2).toFloat())
+            sqrt(best.map { t.error(it).pow(2) }.average()).toFloat(),inlierRatio,
+            (hypot(a-1,b)*hypot(width.toDouble(),height.toDouble())/2).toFloat(),
+            parallaxSuspected = inlierRatio < .65f && parallax(points, height))
+    }
+
+    /**
+     * Paralaxe: metade superior (fundo distante) e inferior (chão/objetos próximos) do fundo são,
+     * cada uma, coerentes, mas com translações diferentes. Uma única transformação 2D não descreve a
+     * cena; a compensação é rejeitada em vez de forçada. Não estima profundidade.
+     */
+    fun parallax(points: List<Match>, height: Int): Boolean {
+        val top = points.filter { it.y < height / 2f }
+        val bottom = points.filter { it.y >= height / 2f }
+        if (top.size < 3 || bottom.size < 3) return false
+        fun layer(ps: List<Match>): Pair<Double, Double>? {
+            val mx = ps.map { it.dx.toDouble() }.sorted()[ps.size / 2]
+            val my = ps.map { it.dy.toDouble() }.sorted()[ps.size / 2]
+            val coherent = ps.count { hypot(it.dx - mx, it.dy - my) <= 1.25 }.toFloat() / ps.size
+            return if (coherent >= .7f) mx to my else null
+        }
+        val a = layer(top) ?: return false
+        val b = layer(bottom) ?: return false
+        return hypot(a.first - b.first, a.second - b.second) > 2.0
     }
 }

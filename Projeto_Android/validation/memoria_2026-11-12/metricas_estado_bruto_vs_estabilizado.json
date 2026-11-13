@@ -1,0 +1,188 @@
+{
+  "antes": {
+    "tracking": {
+      "teste_01_faixa_veiculo": {
+        "trocas_estado_bruto": 3,
+        "trocas_estado_estabilizado": null,
+        "linhas_observadas": 47,
+        "linhas_ghost": 38,
+        "ids_unicos": 2,
+        "obs_por_id_media": 23.5,
+        "obs_por_id_mediana": 23.5,
+        "fragmentos_curtos": 0,
+        "recuperacoes_apos_perda": 9,
+        "classificacoes": {
+          "MOVIMENTO_INCERTO": 28,
+          "PARADO": 14,
+          "POTENCIAL_CONFLITO": 4,
+          "EM_MOVIMENTO": 1
+        }
+      },
+      "teste_02_faixa_semaforo": {
+        "trocas_estado_bruto": 17,
+        "trocas_estado_estabilizado": null,
+        "linhas_observadas": 217,
+        "linhas_ghost": 225,
+        "ids_unicos": 22,
+        "obs_por_id_media": 9.86,
+        "obs_por_id_mediana": 5.0,
+        "fragmentos_curtos": 7,
+        "recuperacoes_apos_perda": 51,
+        "classificacoes": {
+          "MOVIMENTO_INCERTO": 185,
+          "PARADO": 13,
+          "POTENCIAL_CONFLITO": 8,
+          "POSSIVEL_APROXIMACAO": 7,
+          "EM_MOVIMENTO": 4
+        }
+      }
+    },
+    "risco": {
+      "teste_01_faixa_veiculo": {
+        "frames": 310,
+        "frames_perigo": 20,
+        "motivos": {
+          "TRACK_LOST": 77,
+          "MOTION_UNCERTAIN": 33,
+          "POTENTIAL_TRAFFIC_CONFLICT": 20,
+          "OBSTACLE_AHEAD": 2
+        },
+        "etapas": {
+          "INCONCLUSIVE": 174,
+          "DANGER": 58,
+          "VERIFY_RIGHT": 46,
+          "VERIFY_LEFT": 16,
+          "VERIFY_FRONT": 16
+        },
+        "transicoes": [
+          "VERIFY_RIGHT",
+          "VERIFY_LEFT",
+          "VERIFY_FRONT",
+          "INCONCLUSIVE",
+          "DANGER",
+          "INCONCLUSIVE",
+          "DANGER",
+          "INCONCLUSIVE"
+        ],
+        "favoravel": 0
+      },
+      "teste_02_faixa_semaforo": {
+        "frames": 316,
+        "frames_perigo": 86,
+        "motivos": {
+          "TRACK_LOST": 212,
+          "MOTION_UNCERTAIN": 141,
+          "POTENTIAL_TRAFFIC_CONFLICT": 75,
+          "CROSSWALK_OCCUPIED": 11
+        },
+        "etapas": {
+          "DANGER": 206,
+          "VERIFY_RIGHT": 110
+        },
+        "transicoes": [
+          "VERIFY_RIGHT",
+          "DANGER",
+          "VERIFY_RIGHT",
+          "DANGER",
+          "VERIFY_RIGHT",
+          "DANGER",
+          "VERIFY_RIGHT"
+        ],
+        "favoravel": 0
+      }
+    }
+  },
+  "depois": {
+    "tracking": {
+      "teste_01_faixa_veiculo": {
+        "trocas_estado_bruto": 3,
+        "trocas_estado_estabilizado": 3,
+        "linhas_observadas": 47,
+        "linhas_ghost": 38,
+        "ids_unicos": 2,
+        "obs_por_id_media": 23.5,
+        "obs_por_id_mediana": 23.5,
+        "fragmentos_curtos": 0,
+        "recuperacoes_apos_perda": 9,
+        "classificacoes": {
+          "MOVIMENTO_INCERTO": 28,
+          "PARADO": 14,
+          "POTENCIAL_CONFLITO": 4,
+          "EM_MOVIMENTO": 1
+        }
+      },
+      "teste_02_faixa_semaforo": {
+        "trocas_estado_bruto": 17,
+        "trocas_estado_estabilizado": 13,
+        "linhas_observadas": 217,
+        "linhas_ghost": 225,
+        "ids_unicos": 22,
+        "obs_por_id_media": 9.86,
+        "obs_por_id_mediana": 5.0,
+        "fragmentos_curtos": 7,
+        "recuperacoes_apos_perda": 51,
+        "classificacoes": {
+          "MOVIMENTO_INCERTO": 185,
+          "PARADO": 13,
+          "POTENCIAL_CONFLITO": 8,
+          "POSSIVEL_APROXIMACAO": 7,
+          "EM_MOVIMENTO": 4
+        }
+      }
+    },
+    "risco": {
+      "teste_01_faixa_veiculo": {
+        "frames": 310,
+        "frames_perigo": 20,
+        "motivos": {
+          "TRACK_LOST": 77,
+          "MOTION_UNCERTAIN": 35,
+          "POTENTIAL_TRAFFIC_CONFLICT": 20,
+          "OBSTACLE_AHEAD": 2
+        },
+        "etapas": {
+          "INCONCLUSIVE": 174,
+          "DANGER": 58,
+          "VERIFY_RIGHT": 46,
+          "VERIFY_LEFT": 16,
+          "VERIFY_FRONT": 16
+        },
+        "transicoes": [
+          "VERIFY_RIGHT",
+          "VERIFY_LEFT",
+          "VERIFY_FRONT",
+          "INCONCLUSIVE",
+          "DANGER",
+          "INCONCLUSIVE",
+          "DANGER",
+          "INCONCLUSIVE"
+        ],
+        "favoravel": 0
+      },
+      "teste_02_faixa_semaforo": {
+        "frames": 316,
+        "frames_perigo": 91,
+        "motivos": {
+          "TRACK_LOST": 212,
+          "MOTION_UNCERTAIN": 144,
+          "POTENTIAL_TRAFFIC_CONFLICT": 80,
+          "CROSSWALK_OCCUPIED": 11
+        },
+        "etapas": {
+          "DANGER": 211,
+          "VERIFY_RIGHT": 105
+        },
+        "transicoes": [
+          "VERIFY_RIGHT",
+          "DANGER",
+          "VERIFY_RIGHT",
+          "DANGER",
+          "VERIFY_RIGHT",
+          "DANGER",
+          "VERIFY_RIGHT"
+        ],
+        "favoravel": 0
+      }
+    }
+  }
+}
