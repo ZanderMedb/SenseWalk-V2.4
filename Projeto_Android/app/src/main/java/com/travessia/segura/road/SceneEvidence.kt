@@ -16,7 +16,21 @@ data class SceneEvidence(val crosswalk: CrosswalkStatus, val crosswalkBox: RawDe
     /** Sinais de pedestre rastreados mas excluídos (distantes, laterais ou abaixo da faixa: outra travessia?). */
     val excludedPedestrianSignals: Int = 0,
     /** Estado explícito: a aplicabilidade do sinal à travessia do usuário é DESCONHECIDA sem fonte independente. */
-    val signalApplicabilityUnknown: Boolean = true)
+    val signalApplicabilityUnknown: Boolean = true,
+    /**
+     * Faixa com evidência temporal FORTE (>= 4 detecções consistentes ao longo de >= 1,2 s). Uma detecção
+     * isolada ou curta nunca muda o cenário da travessia.
+     */
+    val crosswalkStrong: Boolean = false,
+    /** Algo parecido com faixa apareceu (mesmo sem confirmação): vale esperar um pouco antes de decidir o cenário. */
+    val crosswalkCandidate: Boolean = false,
+    /**
+     * Sinal de PEDESTRE com associação considerada confiável para o fluxo simplificado: faixa forte, um único
+     * sinal de pedestre na imagem (nenhum outro excluído), associado geometricamente à faixa, com a mesma cor
+     * estável e rastreado há >= 1 s. Ainda é evidência visual (não há fonte independente); por isso o fluxo
+     * de sinal verde nunca anuncia segurança e continua monitorando os veículos.
+     */
+    val signalReliable: Boolean = false)
 
 /**
  * Rastreamento temporal leve dos semáforos (ID por proximidade/IoU, mesmo tipo pedestre/veículo).
@@ -24,6 +38,7 @@ data class SceneEvidence(val crosswalk: CrosswalkStatus, val crosswalkBox: RawDe
  */
 class SignalTracker(private val holdMs: Long = 500, private val maxTracks: Int = 12) {
     class Track(val id: Int, val pedestrian: Boolean, var box: RawDetection, var lastSeenMs: Long) {
+        val firstSeenMs: Long = lastSeenMs
         val colors = ArrayDeque<Pair<Long, String>>()
         val color: String get() = colors.lastOrNull()?.second ?: "unknown"
         fun stableColor(nowMs: Long): String? {
@@ -78,6 +93,7 @@ class SceneEvidenceTracker {
         lastSampleMs = nowMs
         val crossing = detections.filter { it.className == "crosswalk" && it.confidence >= .20f }
             .maxByOrNull { it.confidence }
+        val crosswalkCandidate = crossing != null || hits > 0
         if (crossing != null) {
             val previous = crosswalkBox
             val consistent = previous != null && overlap(previous,crossing) >= .25f
@@ -104,6 +120,9 @@ class SceneEvidenceTracker {
         val excluded = signalCandidates.size - associated.size
         val associatedTrack = associated.singleOrNull()?.let { det -> seenTracks.firstOrNull { it.box === det } }
         val colorStable = associatedTrack != null && associatedTrack.stableColor(nowMs) == associatedTrack.color
+        val strong = confirmed && hits >= 4 && lastCrosswalk - firstCrosswalk >= 1200
+        val reliable = strong && associated.size == 1 && excluded == 0 && colorStable &&
+            associatedTrack != null && nowMs - associatedTrack.firstSeenMs >= 1000
         val signal = when {
             associated.size > 1 -> SignalApplicability.UNCERTAIN
             associated.singleOrNull()?.className == "pedestrian-light-red" -> SignalApplicability.PEDESTRIAN_RED
@@ -119,7 +138,9 @@ class SceneEvidenceTracker {
         return SceneEvidence(if (confirmed) CrosswalkStatus.CONFIRMED else CrosswalkStatus.UNCERTAIN,
             if (confirmed) crosswalkBox else null, signal, nowMs, greenSinceMs,
             signalAssociationVerified = false, signalColorStable = colorStable,
-            excludedPedestrianSignals = excluded, signalApplicabilityUnknown = true)
+            excludedPedestrianSignals = excluded, signalApplicabilityUnknown = true,
+            crosswalkStrong = strong, crosswalkCandidate = crosswalkCandidate || crossing != null || hits > 0,
+            signalReliable = reliable)
     }
 
     private fun overlap(a: RawDetection, b: RawDetection): Float {

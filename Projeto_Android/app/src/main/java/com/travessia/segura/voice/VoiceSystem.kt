@@ -124,8 +124,9 @@ class VoiceSystem(
         val previous = observedStates.current(topic)
         val stable = observedStates.observe(topic,state,android.os.SystemClock.elapsedRealtime(),settleMs)
         if (observedStates.current(topic) != previous) {
+            // Instrução superada na fila é descartada; a fala em andamento termina (não corta no meio).
             fila.remove("state:$topic")
-            if (currentMessage?.stateTopic == topic) {
+            if (currentMessage?.stateTopic == topic && SpeechInterruptPolicy.cutOnStateChange(currentMessage?.stateValue)) {
                 stopCurrent()
                 processarFila()
             }
@@ -143,16 +144,15 @@ class VoiceSystem(
         if (fila.offer(ScheduledVoiceMessage(key,text,priority,android.os.SystemClock.elapsedRealtime(),topic,state,
                 android.os.SystemClock.elapsedRealtime()))) {
             if (priority == VoicePriority.SAFETY) fila.dropBelow(priority)
-            if (priority == VoicePriority.SAFETY && (currentPriority?.weight ?: Int.MAX_VALUE) < priority.weight) {
-                stopCurrent()
-            }
+            if (SpeechInterruptPolicy.interrupts(currentPriority, priority)) stopCurrent()
             processarFila()
         }
     }
 
-    @Synchronized fun resetarEstados(prefix: String) {
+    /** [stopCurrent]=false: rearma os estados sem cortar a frase que está sendo falada. */
+    @Synchronized fun resetarEstados(prefix: String, stopCurrent: Boolean = true) {
         observedStates.reset(prefix); fila.removePrefix("state:$prefix")
-        if (currentMessage?.stateTopic?.startsWith(prefix) == true) { stopCurrent(); processarFila() }
+        if (stopCurrent && currentMessage?.stateTopic?.startsWith(prefix) == true) { stopCurrent(); processarFila() }
     }
 
     /** Insere uma mensagem sem interromper uma de prioridade superior já em andamento. */
@@ -168,9 +168,7 @@ class VoiceSystem(
                 decisionElapsedMs = android.os.SystemClock.elapsedRealtime()))) {
             if (prioridade == VoicePriority.SAFETY) fila.dropBelow(prioridade)
             ultimos[chave] = agora
-            if (prioridade == VoicePriority.SAFETY && (currentPriority?.weight ?: Int.MAX_VALUE) < prioridade.weight) {
-                stopCurrent()
-            }
+            if (SpeechInterruptPolicy.interrupts(currentPriority, prioridade)) stopCurrent()
             processarFila()
         }
         Log.d(TAG, "[VOZ] [$chave] $texto")

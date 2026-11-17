@@ -27,6 +27,8 @@ class VoiceCommandController(
     enum class Command {
         START,
         STOP,
+        /** "Terminei" / "Finalizar travessia": encerra a sessão (fica parado; a FFNet não reinicia). */
+        FINISH,
         STATUS,
         SOURCE_PHONE,
         SOURCE_EXTERNAL,
@@ -217,6 +219,10 @@ class VoiceCommandController(
         if (containsAny(text, "parar", "pare", "parar analise", "stop", "stop analysis", "detener", "deten", "parar analisis")) {
             return Command.STOP
         }
+        if (containsAny(text, "terminei", "terminar travessia", "finalizar travessia", "finalizar", "encerrar travessia",
+                "finished", "i m done", "finish crossing", "end crossing", "termine", "terminar cruce", "finalizar cruce")) {
+            return Command.FINISH
+        }
         if (containsAny(text, "analisar novamente", "analisar de novo", "verificar novamente", "verificar de novo",
                 "analyze again", "check again", "analizar de nuevo", "analizar otra vez", "verificar otra vez")) {
             return Command.RESTART
@@ -226,7 +232,7 @@ class VoiceCommandController(
         if (containsAny(text, "continuar", "continue", "continua", "proximo", "proxima", "next", "siguiente", "avancar")) {
             return Command.CONTINUE
         }
-        if (containsAny(text, "iniciar", "iniciar analise", "comecar", "comece", "start", "start analysis", "begin", "iniciar analisis", "comenzar")) {
+        if (containsAny(text, "iniciar", "iniciar analise", "nova travessia", "new crossing", "nuevo cruce", "nueva travesia", "comecar", "comece", "start", "start analysis", "begin", "iniciar analisis", "comenzar")) {
             return Command.START
         }
         if (containsAny(text, "status", "estado", "situacao", "situation", "state", "estado actual", "situacion")) {

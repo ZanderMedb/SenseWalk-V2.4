@@ -130,7 +130,14 @@ class MainActivity : AppCompatActivity() {
     private var userStopped = false
     /** Incrementado a cada início/fim de análise; descarta callbacks/timers de sessões antigas. */
     private var analysisSession = 0L
-    private enum class EndReason { FINISHED, CANCELLED, STOPPED, NO_VIDEO }
+    /** ENDED = "Terminei"/"Finalizar travessia": como STOPPED (fica parado, a FFNet não reinicia). */
+    private enum class EndReason { FINISHED, CANCELLED, STOPPED, ENDED, NO_VIDEO;
+        val stops: Boolean get() = this == STOPPED || this == ENDED }
+    /** Um "Atenção!" por veículo (o mesmo carro oscilando não repete o alerta). */
+    private val dangerGate = com.travessia.segura.voice.DangerAlertGate()
+    /** Último aviso de sinal/faixa falado: sem repetir enquanto o sinal não mudar. */
+    private var lastScenarioSpoken: CrossingVerification.Stage? = null
+    private var handSpoken = false
     private val sessionHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val listeningPolicy = com.travessia.segura.voice.ListeningWindowPolicy()
     private var autoListening = false
@@ -305,11 +312,12 @@ class MainActivity : AppCompatActivity() {
         orientationSource = com.travessia.segura.orientation.OrientationSensorSource(this, orientationTracker)
         crossing = CrossingVerification(
             onChange = { stage -> runOnUiThread { updateCrossingStage(stage) } },
+            contextWindowMs = 1500,
             onReprompt = { stage -> runOnUiThread { repeatInstruction(stage, reminder = true) } },
             onRetry = { stage -> runOnUiThread {
                 if (isActive && crossing.stage == stage) {
                     com.travessia.segura.benchmark.Perf.stats.count("seq_retries")
-                    voz.resetarEstados("crossing_stage")
+                    voz.resetarEstados("crossing_stage", stopCurrent = false)
                     // Orientação concreta quando o sensor explica a falha; senão a mensagem genérica.
                     val cov = orientationTracker.lastCoverage
                     val dir = crossing.currentDirection
@@ -600,6 +608,16 @@ class MainActivity : AppCompatActivity() {
                 pendingVoiceStart = false
                 if (isActive || roadCoordinator.running) endAnalysis(EndReason.STOPPED)
                 else voz.forcarPrioritario("voice_state", tr("voice_already_inactive"), VoicePriority.CONTROL)
+            }
+
+            // "Terminei" / "Finalizar travessia": encerra YOLO, falas e memória; fica parado até novo início.
+            VoiceCommandController.Command.FINISH -> {
+                pendingVoiceStart = false
+                if (isActive || roadCoordinator.running) endAnalysis(EndReason.ENDED)
+                else {
+                    userStopped = true
+                    voz.forcarPrioritario("cancelado", RoadText.get(config.appLanguage, "crossing_ended"), VoicePriority.CONTROL)
+                }
             }
 
             VoiceCommandController.Command.CANCEL -> {
@@ -1062,8 +1080,8 @@ class MainActivity : AppCompatActivity() {
 
     /** FFNet confirmou rua: inicia uma única análise, salvo parada explícita ou sessão superada. */
     private fun onRoadConfirmed(token: Long) {
-        if (foreground && !userStopped && !isActive && roadCoordinator.running && token == roadCoordinator.resultToken &&
-            btnToggle.isEnabled) {
+        if (com.travessia.segura.road.AutoStartPolicy.shouldAutoStart(foreground, userStopped, isActive,
+                roadCoordinator.running, token == roadCoordinator.resultToken, btnToggle.isEnabled)) {
             startAnalysis(automatic = true)
         } else if (!isActive) {
             cameraExecutor.execute { roadCoordinator.finishAnalysis() }
@@ -1096,10 +1114,13 @@ class MainActivity : AppCompatActivity() {
         } else cameraMode == MODE_LOCAL_CAMERA && orientationSource.start()
         if (sensorOk) orientationTracker.requestCalibration() else orientationSource.stop()
         sessionMemory.beginSession(analysisSession)
+        dangerGate.reset(); lastScenarioSpoken = null; handSpoken = false
         stateMachine.entrarEstado(EST_RECONHECENDO)
         crossing.start(SystemClock.elapsedRealtime())
         // Explica os comandos uma vez, no início: "pronto" em cada direção e "parar" para encerrar.
-        voz.forcar("inicio", RoadText.get(config.appLanguage, if (automatic) "road_confirmed" else "analysis_intro"))
+        // Informativa (prioridade baixa): não corta nada e a primeira instrução vem logo depois.
+        voz.falarPrioritario("inicio", RoadText.get(config.appLanguage, if (automatic) "road_confirmed" else "analysis_intro"),
+            VoicePriority.INFO)
         atualizarBotaoToggle()
         tvAlertStatus.text = tr("analysis_running")
         overlayView.clear()
@@ -1124,15 +1145,15 @@ class MainActivity : AppCompatActivity() {
         overlayView.updateLookTag("", false)
         if (cameraMode == MODE_USB_CAMERA && usbClient != null) { enableVisualOrientation(); orientationTracker.requestCalibration() }
         sessionMemory.clear()
-        if (::voiceCommands.isInitialized && reason == EndReason.STOPPED) voiceCommands.cancel()
-        voz.interromper(preserveSafety = reason != EndReason.STOPPED)
+        if (::voiceCommands.isInitialized && reason.stops) voiceCommands.cancel()
+        voz.interromper(preserveSafety = !reason.stops)
         voz.resetarEstados("crossing_")
         val benchmarkResult = if (wasActive) benchmarkLogger.stopSession() else null
         if (::stateMachine.isInitialized) stateMachine.entrarEstado(EST_INATIVO)
         // Sem imagem: não voltar a procurar rua sozinho (repetiria o aviso); "iniciar análise" ou trocar a câmera.
-        val returnToSearch = reason != EndReason.STOPPED && reason != EndReason.NO_VIDEO && !userStopped &&
+        val returnToSearch = !reason.stops && reason != EndReason.NO_VIDEO && !userStopped &&
             foreground && config.automaticRoadDetection
-        if (reason == EndReason.STOPPED) userStopped = true
+        if (reason.stops) userStopped = true
         if (returnToSearch) {
             cameraExecutor.execute { roadCoordinator.finishAnalysis() }
             resumeRoadMonitoring()
@@ -1143,6 +1164,7 @@ class MainActivity : AppCompatActivity() {
         }
         val key = when (reason) {
             EndReason.STOPPED -> "analysis_stopped"
+            EndReason.ENDED -> "crossing_ended"
             EndReason.CANCELLED -> "analysis_cancelled"
             EndReason.FINISHED -> if (returnToSearch) "analysis_finished" else null
             EndReason.NO_VIDEO -> null
@@ -1206,8 +1228,10 @@ class MainActivity : AppCompatActivity() {
         CrossingVerification.Stage.AWAIT_RIGHT -> "verify_right"
         CrossingVerification.Stage.AWAIT_LEFT -> "verify_left"
         CrossingVerification.Stage.AWAIT_FRONT -> "verify_front"
-        CrossingVerification.Stage.VERIFY_RIGHT, CrossingVerification.Stage.VERIFY_LEFT,
-        CrossingVerification.Stage.VERIFY_FRONT -> "verify_analyzing"
+        // Observando: silêncio (nada novo a dizer).
+        CrossingVerification.Stage.CROSSWALK_WAIT -> "crosswalk_hand"
+        CrossingVerification.Stage.SIGNAL_RED -> "signal_red"
+        CrossingVerification.Stage.SIGNAL_GREEN -> "signal_green"
         CrossingVerification.Stage.FAVORABLE_OBSERVATION -> "verify_favorable"
         CrossingVerification.Stage.DANGER -> "verify_danger"
         // Sem falar de faixa: a ausência de detecção não prova ausência de faixa.
@@ -1220,34 +1244,35 @@ class MainActivity : AppCompatActivity() {
         else -> null
     }
 
-    /** Resultado falado por direção (o que foi visto), em vez de um "inconclusivo" genérico. */
-    private fun directionSummary(): String {
-        val lang = config.appLanguage
-        val parts = CrossingVerification.Direction.values().map { d ->
-            val name = RoadText.get(lang, "dir_${d.name.lowercase()}")
-            val key = when {
-                crossing.outcome(d) == CrossingVerification.ObservationOutcome.NO_CONFLICT_OBSERVED -> "obs_no_conflict"
-                crossing.outcome(d) == CrossingVerification.ObservationOutcome.POTENTIAL_DANGER -> "obs_danger"
-                crossing.cleanButUnverified(d) -> "obs_clean_unverified"
-                crossing.outcome(d) == CrossingVerification.ObservationOutcome.NOT_OBSERVED -> "obs_not_observed"
-                crossing.hadUncertainVehicles(d) -> "obs_uncertain_vehicles"
-                else -> "obs_inconclusive"
-            }
-            "$name: ${RoadText.get(lang, key)}."
-        }
-        val anyDanger = CrossingVerification.Direction.values().any {
-            crossing.outcome(it) == CrossingVerification.ObservationOutcome.POTENTIAL_DANGER }
-        return parts.joinToString(" ") + " " + RoadText.get(lang, if (anyDanger) "summary_tail_danger" else "summary_tail")
+    private fun stageText(stage: CrossingVerification.Stage): String? =
+        stageTextKey(stage)?.let { RoadText.get(config.appLanguage, it) }
+
+    /** Prioridade da fala: perigo > orientação/sinal/aguardar > início/resultado. */
+    private fun stagePriority(stage: CrossingVerification.Stage): VoicePriority = when (stage) {
+        CrossingVerification.Stage.DANGER -> VoicePriority.SAFETY
+        CrossingVerification.Stage.FAVORABLE_OBSERVATION, CrossingVerification.Stage.INCONCLUSIVE -> VoicePriority.INFO
+        else -> VoicePriority.CROSSING
     }
 
-    private fun stageText(stage: CrossingVerification.Stage): String? {
-        if (stage == CrossingVerification.Stage.INCONCLUSIVE && !crossing.noConflictObservedAllDirections &&
-            CrossingVerification.Direction.values().any { crossing.outcome(it) != CrossingVerification.ObservationOutcome.NOT_OBSERVED })
-            return directionSummary()
-        val key = stageTextKey(stage) ?: return null
-        val hand = if (stage == CrossingVerification.Stage.FAVORABLE_OBSERVATION && crossing.handSignalApplicable)
-            " " + RoadText.get(config.appLanguage,"verify_hand") else ""
-        return RoadText.get(config.appLanguage, key) + hand
+    /**
+     * Falas que não acrescentam informação ficam em silêncio: o mesmo aviso de sinal não se repete enquanto o
+     * sinal não mudar (voltar ao verde depois de um alerta não repete "Sinal verde"), a orientação de levantar a
+     * mão é dada uma vez por sessão e o alerta de perigo é um por veículo.
+     */
+    private fun stageSpeechAllowed(stage: CrossingVerification.Stage, commit: Boolean): Boolean {
+        val allowed = when (stage) {
+            CrossingVerification.Stage.SIGNAL_RED, CrossingVerification.Stage.SIGNAL_GREEN -> lastScenarioSpoken != stage
+            CrossingVerification.Stage.CROSSWALK_WAIT -> !handSpoken
+            CrossingVerification.Stage.DANGER -> !voz.alertaEmAndamento &&
+                (!commit || dangerGate.shouldAlert(crossing.dangerTrackIds, SystemClock.elapsedRealtime()))
+            else -> true
+        }
+        if (allowed && commit) when (stage) {
+            CrossingVerification.Stage.SIGNAL_RED, CrossingVerification.Stage.SIGNAL_GREEN -> lastScenarioSpoken = stage
+            CrossingVerification.Stage.CROSSWALK_WAIT -> handSpoken = true
+            else -> Unit
+        }
+        return allowed
     }
 
     /** Uma fala por mudança de etapa; falas de etapas superadas são descartadas pelo VoiceSystem. */
@@ -1268,15 +1293,11 @@ class MainActivity : AppCompatActivity() {
         }
         recordStageTiming(stage)
         val text = stageText(stage)
-        if (text != null && stage == CrossingVerification.Stage.DANGER && voz.alertaEmAndamento) {
-            // O alerta específico do veículo já está sendo falado: não empilhar um segundo aviso genérico.
-            tvInfo.text = text
-            voz.observarEstado("crossing_stage", stage.name)
-        } else if (text != null) {
-            tvInfo.text = text
-            voz.falarEstado("crossing_stage", stage.name, text,
-                if (stage == CrossingVerification.Stage.DANGER) VoicePriority.SAFETY else VoicePriority.CROSSING)
-        } else if (stage != CrossingVerification.Stage.MONITORING) voz.observarEstado("crossing_stage",stage.name)
+        if (text != null) tvInfo.text = text
+        else if (stage.name.startsWith("VERIFY_")) tvInfo.text = RoadText.get(config.appLanguage, "verify_analyzing")
+        if (text != null && stageSpeechAllowed(stage, commit = true)) {
+            voz.falarEstado("crossing_stage", stage.name, text, stagePriority(stage))
+        } else voz.observarEstado("crossing_stage", stage.name)
         if (crossing.finished) scheduleNormalFinish()
     }
 
@@ -1291,9 +1312,11 @@ class MainActivity : AppCompatActivity() {
         if (stage in setOf(CrossingVerification.Stage.MONITORING, CrossingVerification.Stage.DANGER,
                 CrossingVerification.Stage.VERIFY_RIGHT, CrossingVerification.Stage.VERIFY_LEFT,
                 CrossingVerification.Stage.VERIFY_FRONT)) return
+        // Avisos de sinal/faixa já dados (ou suprimidos por repetição) não são reforçados aqui.
+        if (stage in setOf(CrossingVerification.Stage.SIGNAL_RED, CrossingVerification.Stage.SIGNAL_GREEN,
+                CrossingVerification.Stage.CROSSWALK_WAIT)) return
         val text = stageText(stage) ?: return
-        voz.falarEstado("crossing_stage", stage.name, text,
-            if (stage == CrossingVerification.Stage.DANGER) VoicePriority.SAFETY else VoicePriority.CROSSING)
+        voz.falarEstado("crossing_stage", stage.name, text, stagePriority(stage))
     }
 
     private var lastStageChangeMs = 0L
@@ -1323,8 +1346,7 @@ class MainActivity : AppCompatActivity() {
         }
         val prefix = if (reminder) RoadText.get(config.appLanguage, "verify_reprompt") else ""
         voz.resetarEstados("crossing_stage")
-        voz.falarEstado("crossing_stage", stage.name, prefix + text,
-            if (stage == CrossingVerification.Stage.DANGER) VoicePriority.SAFETY else VoicePriority.CROSSING)
+        voz.falarEstado("crossing_stage", stage.name, prefix + text, stagePriority(stage))
     }
 
     private fun atualizarUI(estado: String, situacao: String, nVeiculos: Int, semCor: String) {

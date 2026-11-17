@@ -65,4 +65,15 @@ class VoiceCommandValidationTest {
         assertEquals(VoiceCommandController.Command.UNKNOWN,parse("não continuar"))
         assertEquals(VoiceCommandController.Command.UNKNOWN,parse("não cancelar"))
     }
+
+    // 11. "Terminei" / "Finalizar travessia" encerram; "Nova travessia" inicia de novo.
+    @Test fun finishAndNewCrossingCommands() {
+        for (t in listOf("Terminei", "terminei", "Finalizar travessia", "finalizar", "encerrar travessia", "finished", "terminé"))
+            assertEquals(t, VoiceCommandController.Command.FINISH, parse(t))
+        for (t in listOf("Nova travessia", "Iniciar análise", "new crossing", "nuevo cruce"))
+            assertEquals(t, VoiceCommandController.Command.START, parse(t))
+        assertEquals("parar continua valendo", VoiceCommandController.Command.STOP, parse("parar"))
+        assertEquals("negação não encerra", VoiceCommandController.Command.UNKNOWN, parse("não terminei"))
+        assertEquals("pronto continua opcional", VoiceCommandController.Command.CONFIRM_DIRECTION, parse("pronto"))
+    }
 }

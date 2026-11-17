@@ -56,8 +56,16 @@ class CrosswalkSpeechTest {
         val stripe = RawDetection(80f, 150f, 550f, 310f, 8, "crosswalk", .8f)
         val car = VeiculoInfo("car", .9f, 300f, 230f, "PARADO", 0f, floatArrayOf(250f, 180f, 350f, 280f), 100f, 1)
         val risk = CrossingRiskAnalyzer.analyze(listOf(car), 640, 360, stripe, cameraReliable = true)
+        // Na travessia guiada o alerta é falado UMA vez pela sequência ("Atenção! Veículo se aproximando."):
+        // a máquina antiga só observa, para não somar dois avisos.
         machine.processar(mapOf(1 to car), 0, "NENHUM", true, 300f, 640, 360, risk,
             monitorHazards = true, guidedVerification = true)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertFalse(tts.spokenTextList.toString(), tts.spokenTextList.contains(RoadText.get("pt", "crosswalk_occupied")))
+        // Fora da sequência (monitoramento de perigos) o alerta continua sendo falado.
+        voice.resetarEstados("scene_")
+        machine.processar(mapOf(1 to car), 0, "NENHUM", true, 300f, 640, 360, risk,
+            monitorHazards = true, guidedVerification = false)
         shadowOf(Looper.getMainLooper()).idle()
         assertTrue(tts.spokenTextList.toString(), tts.spokenTextList.contains(RoadText.get("pt", "crosswalk_occupied")))
         assertEquals(emptyList<String>(), mentionsCrosswalk(tts.spokenTextList))
@@ -75,12 +83,12 @@ class CrosswalkSpeechTest {
         // Falas curtas; "diga pronto" só é acrescentado quando não há sensor de orientação (USB).
         // "Aponte e mantenha": nenhuma instrução da sequência pede "pronto".
         assertEquals("Aponte a câmera para a direita e mantenha.", RoadText.get("pt", "verify_right"))
-        assertEquals("Agora, esquerda. Mantenha.", RoadText.get("pt", "verify_left"))
-        assertEquals("Agora, à frente. Mantenha.", RoadText.get("pt", "verify_front"))
+        assertEquals("Agora, à esquerda e mantenha.", RoadText.get("pt", "verify_left"))
+        assertEquals("Agora, à frente e mantenha.", RoadText.get("pt", "verify_front"))
         for (k in listOf("verify_right", "verify_left", "verify_front")) assertFalse(RoadText.get("pt", k).contains("pronto"))
         assertTrue(RoadText.get("pt", "say_ready_suffix").contains("pronto"))
         assertTrue(RoadText.get("pt", "ready_explain").contains("pronto"))
-        assertEquals("fala curta para a direita vir logo", "Rua identificada.", RoadText.get("pt", "road_confirmed"))
-        assertTrue(RoadText.get("pt", "analysis_intro").contains("parar"))
+        assertEquals("fala curta para a direita vir logo", "Vamos verificar o trânsito.", RoadText.get("pt", "road_confirmed"))
+        assertEquals("Vamos verificar o trânsito.", RoadText.get("pt", "analysis_intro"))
     }
 }

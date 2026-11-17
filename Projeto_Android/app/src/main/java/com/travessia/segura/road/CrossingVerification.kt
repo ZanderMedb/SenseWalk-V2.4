@@ -44,11 +44,33 @@ class CrossingVerification(
     private val coverageWaitMs: Long = 12000,
     private val coverageHintMs: Long = 5000,
     private val dangerClearMs: Long = 2000,
+    /**
+     * Janela inicial (câmera à frente) para reconhecer o cenário: semáforo de pedestres ou faixa sem semáforo.
+     * 0 = decide no primeiro quadro (testes antigos). O app usa ~1,5 s, estendida até [contextMaxMs] quando
+     * há algo parecido com faixa/sinal (evidência ainda amadurecendo). Sem cenário confiável: fluxo direcional.
+     */
+    private val contextWindowMs: Long = 0,
+    private val contextMaxMs: Long = 3000,
+    /** Sinal vermelho sem ser visto por este tempo: volta à verificação convencional (não presume verde). */
+    private val redLostMs: Long = 2500,
+    /** Verde perdido (falha de detecção) tolerado por este tempo; depois o estado verde é invalidado. */
+    private val greenLossMs: Long = 1500,
+    /** Observação mínima dos veículos com sinal verde / faixa (quadros limpos, não um tempo fixo de espera). */
+    private val signalObserveMs: Long = 2000,
+    private val handObserveMs: Long = 3000,
     private val motionThreshold: Float = .15f,
     private val minMotionConfidence: Float = .30f
 ) {
     enum class Stage { IDLE, ANALYZING, AWAIT_RIGHT, VERIFY_RIGHT, AWAIT_LEFT, VERIFY_LEFT,
-        AWAIT_FRONT, VERIFY_FRONT, FAVORABLE_OBSERVATION, MONITORING, DANGER, INCONCLUSIVE }
+        AWAIT_FRONT, VERIFY_FRONT, FAVORABLE_OBSERVATION, MONITORING, DANGER, INCONCLUSIVE,
+        /** Faixa forte + contexto SEM semáforo confirmado por fonte independente: "Levante a mão e aguarde". */
+        CROSSWALK_WAIT,
+        /** Sinal vermelho de pedestres (cor estável): "Sinal vermelho. Aguarde." Espera a mudança do sinal. */
+        SIGNAL_RED,
+        /** Sinal verde de pedestres com associação confiável: monitora os veículos (nunca anuncia segurança). */
+        SIGNAL_GREEN }
+    /** Cenário escolhido para esta sessão. */
+    enum class Scenario { UNDECIDED, DIRECTIONAL, CROSSWALK_NO_SIGNAL, PEDESTRIAN_SIGNAL }
     enum class Direction { RIGHT, LEFT, FRONT }
     /** Estados não equivalentes: pedido != movimento != cobertura. */
     enum class DirectionStatus { NOT_REQUESTED, REQUESTED, MOTION_DETECTED, COVERAGE_CONFIRMED, COVERAGE_INCONCLUSIVE }
@@ -73,13 +95,20 @@ class CrossingVerification(
         (stage == Stage.DANGER && resumeStage in setOf(Stage.INCONCLUSIVE, Stage.FAVORABLE_OBSERVATION, Stage.MONITORING))
     /** Direção cuja cobertura deve ser medida neste frame (frente durante o monitoramento favorável). */
     val coverageDirection: Direction? get() = when (stage) {
-        Stage.FAVORABLE_OBSERVATION, Stage.MONITORING -> Direction.FRONT
+        Stage.FAVORABLE_OBSERVATION, Stage.MONITORING, Stage.CROSSWALK_WAIT,
+        Stage.SIGNAL_RED, Stage.SIGNAL_GREEN -> Direction.FRONT
         Stage.DANGER -> directionOf(resumeStage)
         else -> directionOf(stage)
     }
     /** Etapa de orientação atual, se houver (para comandos de voz e "Repetir"). */
     val currentDirection: Direction? get() = directionOf(if (stage == Stage.DANGER) resumeStage else stage)
     var lastVisualCameraMotion: MotionEstimate? = null; private set
+    @Volatile var scenario = Scenario.UNDECIDED; private set
+    /**
+     * Veículos (trackId) que provocaram o último perigo. Usado para alertar UMA vez por veículo
+     * (ver [com.travessia.segura.voice.DangerAlertGate]).
+     */
+    @Volatile var dangerTrackIds: Set<Int> = emptySet(); private set
 
     private val status = mutableMapOf<Direction, DirectionStatus>()
     private val outcomes = mutableMapOf<Direction, ObservationOutcome>()
@@ -132,6 +161,9 @@ class CrossingVerification(
     private var windowFrames = 0
     private var instructionHeardAt = -1L
     private var coverageHintGiven = false
+    private var lastRedAt = -1L
+    private var lastGreenValidAt = -1L
+    private var signalResume: Direction? = null
 
     @Synchronized fun start(now: Long) {
         reset()
@@ -221,10 +253,40 @@ class CrossingVerification(
         }
         if (withCrosswalk && scene.signal == SignalApplicability.PEDESTRIAN_GREEN) signalWasGreen = true
 
+        val redStable = scene.signal == SignalApplicability.PEDESTRIAN_RED && scene.signalColorStable
+        if (scene.signal == SignalApplicability.PEDESTRIAN_RED) lastRedAt = capturedAtMs
+        // Sinal vermelho de pedestres com cor estável: aguardar a mudança do sinal, sem roteiro direita/esquerda.
+        // (Vermelho é o lado conservador: basta a associação geométrica + cor estável.)
+        if (redStable && stage != Stage.SIGNAL_RED && stage != Stage.INCONCLUSIVE) {
+            signalResume = currentDirection ?: signalResume
+            if (stage == Stage.DANGER) resumeStage = Stage.IDLE
+            handSignalApplicable = false
+            for (d in Direction.values()) if (outcomes[d] == ObservationOutcome.NO_CONFLICT_OBSERVED)
+                outcomes[d] = ObservationOutcome.INCONCLUSIVE
+            scenario = Scenario.PEDESTRIAN_SIGNAL
+            resetSamples()
+            change(Stage.SIGNAL_RED)
+            return
+        }
+        if (stage == Stage.SIGNAL_RED) {
+            // Veículos passando no vermelho do pedestre são esperados: o usuário já está aguardando.
+            if (scene.signal == SignalApplicability.PEDESTRIAN_GREEN && scene.signalReliable && risk.confidence.visualCurrent) {
+                enterGreen(capturedAtMs); return
+            }
+            if (lastRedAt >= 0 && capturedAtMs - lastRedAt >= redLostMs) {
+                // Sinal deixou de ser visto (sem verde confiável): verificação convencional, sem presumir nada.
+                scenario = Scenario.DIRECTIONAL
+                enterAwait(signalResume ?: Direction.RIGHT, capturedAtMs)
+            }
+            return
+        }
+
         // Perigo tem prioridade em qualquer etapa e é mantido com histerese (sem oscilar a fala).
         if (risk.danger || scene.signal == SignalApplicability.PEDESTRIAN_RED) {
             lastDangerAt = capturedAtMs
             if (stage != Stage.DANGER) {
+                dangerTrackIds = risk.vehicles.filter { it.conflicting || it.obstacle ||
+                    it.classification in com.travessia.segura.tracking.MotionClass.CONFLICT }.map { it.trackId }.toSet()
                 resumeStage = stage
                 handSignalApplicable = false
                 dangerDuringSequence = true
@@ -245,6 +307,10 @@ class CrossingVerification(
             val back = resumeStage
             resumeStage = Stage.IDLE
             when {
+                // Cenário de sinal/faixa: volta a monitorar no mesmo cenário (sem repetir a orientação).
+                back == Stage.SIGNAL_GREEN || back == Stage.CROSSWALK_WAIT -> {
+                    startedAt = capturedAtMs; resetSamples(); change(back)
+                }
                 direction != null -> enterAwait(direction, capturedAtMs) // retoma a MESMA direção
                 back == Stage.ANALYZING -> enterAwait(Direction.RIGHT, capturedAtMs)
                 else -> change(Stage.INCONCLUSIVE) // favorável perdido nunca volta sozinho
@@ -252,6 +318,15 @@ class CrossingVerification(
             return
         }
 
+        if ((stage == Stage.FAVORABLE_OBSERVATION || stage == Stage.MONITORING) && scenario == Scenario.PEDESTRIAN_SIGNAL) {
+            // Verde já observado: continua valendo só enquanto o verde confiável continua sendo visto.
+            if (greenValid(scene)) lastGreenValidAt = capturedAtMs
+            val contradictory = scene.signal == SignalApplicability.UNCERTAIN
+            if (!risk.confidence.visualCurrent || contradictory || capturedAtMs - lastGreenValidAt > greenLossMs) {
+                change(Stage.INCONCLUSIVE)
+            } else change(Stage.MONITORING)
+            return
+        }
         if (stage == Stage.FAVORABLE_OBSERVATION || stage == Stage.MONITORING) {
             if (!risk.confidence.visualCurrent || !risk.conclusive || cameraMotion?.translationSupported == false ||
                 !sidesFresh(decisionAtMs) || !signalValid(scene, capturedAtMs) ||
@@ -264,7 +339,9 @@ class CrossingVerification(
         }
         if (stage == Stage.INCONCLUSIVE) return // terminal: sem reinício automático (evita loop)
         if (!risk.confidence.visualCurrent) { resetSamples(); return }
-        if (stage == Stage.ANALYZING) { enterAwait(Direction.RIGHT, capturedAtMs); return } // YOLO ativo
+        if (stage == Stage.ANALYZING) { decideScenario(scene, capturedAtMs); return }
+        if (stage == Stage.SIGNAL_GREEN) { observeGreen(risk, scene, capturedAtMs, cameraMotion); return }
+        if (stage == Stage.CROSSWALK_WAIT) { observeCrosswalk(risk, scene, capturedAtMs, cameraMotion); return }
 
         val direction = directionOf(stage) ?: return
         if (stage.name.startsWith("AWAIT_")) {
@@ -352,6 +429,81 @@ class CrossingVerification(
             return
         }
         completeDirection(direction, capturedAtMs, verified = false)
+    }
+
+    /** Câmera à frente no início: escolhe o cenário só com evidência confiável; senão, fluxo direcional. */
+    private fun decideScenario(scene: SceneEvidence, now: Long) {
+        when {
+            greenValid(scene) -> { enterGreen(now); return }
+            scene.crosswalkStrong && scene.signal == SignalApplicability.NOT_APPLICABLE_CONFIRMED -> {
+                scenario = Scenario.CROSSWALK_NO_SIGNAL
+                withCrosswalk = true
+                startedAt = now; resetSamples(); change(Stage.CROSSWALK_WAIT); return
+            }
+        }
+        // Algo parecido com faixa/sinal: dar tempo à evidência temporal amadurecer (nunca decidir por 1 quadro).
+        val maturing = scene.crosswalkCandidate || scene.signal in setOf(SignalApplicability.PEDESTRIAN_GREEN,
+            SignalApplicability.PEDESTRIAN_RED, SignalApplicability.UNCERTAIN)
+        val window = if (maturing) maxOf(contextWindowMs, contextMaxMs.takeIf { contextWindowMs > 0 } ?: 0L) else contextWindowMs
+        if (now - startedAt >= window) { scenario = Scenario.DIRECTIONAL; enterAwait(Direction.RIGHT, now) }
+    }
+
+    private fun greenValid(scene: SceneEvidence) =
+        scene.signal == SignalApplicability.PEDESTRIAN_GREEN && scene.signalReliable && scene.signalColorStable
+
+    private fun enterGreen(now: Long) {
+        scenario = Scenario.PEDESTRIAN_SIGNAL
+        withCrosswalk = true; signalWasGreen = true
+        lastGreenValidAt = now; startedAt = now; resetSamples()
+        change(Stage.SIGNAL_GREEN)
+    }
+
+    /** Quadro "limpo" para os cenários de sinal/faixa: nenhum conflito, movimento confiável, imagem atual. */
+    private fun cleanFrame(risk: CrossingRiskAssessment, motion: MotionEstimate?) =
+        risk.reasons.isEmpty() && risk.confidence.visualCurrent && risk.confidence.motionReliable &&
+            (risk.vehicles.isEmpty() || motion?.translationSupported != false)
+
+    /**
+     * Verde de pedestres: monitora os veículos. Conclui ("Verificação concluída.") só com quadros limpos
+     * observados ao longo de [signalObserveMs] E o verde continuando válido; o tempo sozinho não prova nada.
+     * Verde perdido/contraditório -> invalida e volta ao fluxo convencional.
+     */
+    private fun observeGreen(risk: CrossingRiskAssessment, scene: SceneEvidence, now: Long, motion: MotionEstimate?) {
+        if (greenValid(scene)) lastGreenValidAt = now
+        if (scene.signal == SignalApplicability.UNCERTAIN || now - lastGreenValidAt > greenLossMs) {
+            signalWasGreen = false; withCrosswalk = false
+            scenario = Scenario.DIRECTIONAL
+            enterAwait(Direction.RIGHT, now); return
+        }
+        if (!greenValid(scene) || !cleanFrame(risk, motion)) { resetSamples(); return }
+        if (lastSample >= 0 && now - lastSample > 1500) resetSamples()
+        if (firstSample < 0) firstSample = now
+        lastSample = now; sampleCount++
+        if (sampleCount >= 3 && now - firstSample >= signalObserveMs) {
+            outcomes[Direction.FRONT] = ObservationOutcome.NO_CONFLICT_OBSERVED
+            resetSamples(); change(Stage.FAVORABLE_OBSERVATION)
+        }
+    }
+
+    /**
+     * Faixa sem semáforo: "Levante a mão e aguarde os veículos pararem." Continua analisando os veículos.
+     * Veículos aparentemente parados NÃO comprovam que os outros sentidos estão livres: depois de uma
+     * observação limpa da frente, pede uma observação breve das laterais (fluxo direcional).
+     */
+    private fun observeCrosswalk(risk: CrossingRiskAssessment, scene: SceneEvidence, now: Long, motion: MotionEstimate?) {
+        if (scene.signal in setOf(SignalApplicability.PEDESTRIAN_GREEN, SignalApplicability.UNCERTAIN)) {
+            // Apareceu um sinal: o contexto "sem semáforo" deixou de valer.
+            scenario = Scenario.DIRECTIONAL; enterAwait(Direction.RIGHT, now); return
+        }
+        if (!cleanFrame(risk, motion)) { resetSamples(); return }
+        if (lastSample >= 0 && now - lastSample > 1500) resetSamples()
+        if (firstSample < 0) firstSample = now
+        lastSample = now; sampleCount++
+        if (sampleCount >= 3 && now - firstSample >= handObserveMs) {
+            outcomes[Direction.FRONT] = ObservationOutcome.NO_CONFLICT_OBSERVED
+            scenario = Scenario.DIRECTIONAL
+            enterAwait(Direction.RIGHT, now)
+        }
     }
 
     private fun observeAwait(direction: Direction, now: Long, motion: MotionEstimate?, frameWidth: Int) {
@@ -448,5 +600,6 @@ class CrossingVerification(
         cleanUnverified.clear(); directionsWithUncertainVehicles.clear()
         lastVisualCameraMotion = null; handSignalApplicable = false; signalWasGreen = false; withCrosswalk = false
         unsupportedGeometry = false; unsupportedDirection = false; resumeStage = Stage.IDLE; lastDangerAt = -1
-        dangerDuringSequence = false; resetSamples(); resetMotion() }
+        dangerDuringSequence = false; resetSamples(); resetMotion()
+        scenario = Scenario.UNDECIDED; dangerTrackIds = emptySet(); lastRedAt = -1; lastGreenValidAt = -1; signalResume = null }
 }

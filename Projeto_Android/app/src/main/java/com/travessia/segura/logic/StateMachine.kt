@@ -110,25 +110,29 @@ class StateMachine(
         guidedVerification: Boolean = false
     ) {
         val alertsEnabled = estado != EST_INATIVO || monitorHazards
+        // Durante a travessia guiada, sinal/perigo são falados UMA vez pela própria sequência
+        // ("Sinal vermelho. Aguarde." / "Atenção! Veículo se aproximando. Aguarde."): aqui só observa.
+        fun alert(topic: String, state: String, text: String) =
+            if (guidedVerification) voz.observarEstado(topic, state) else { voz.falarEstado(topic, state, text, VoicePriority.SAFETY); true }
         currentRisk = risk
         semCorAtual = semCorFrame
         faixaCentroX = faixaCx
         if (alertsEnabled && faixaDet && semCorFrame == "VERMELHO")
-            voz.falarEstado("scene_light", "ped_red", config.tr("voice_red_light_wait"), VoicePriority.SAFETY)
+            alert("scene_light", "ped_red", config.tr("voice_red_light_wait"))
         else if (semCorFrame == "NENHUM") voz.observarEstado("scene_light", "not_observed", 1500)
         val conflicting = risk?.vehicles?.firstOrNull { it.conflicting }
         if (alertsEnabled && risk?.reasons?.contains(RiskReason.CROSSWALK_OCCUPIED) == true) {
-            voz.falarEstado("scene_obstruction", "occupied", RoadText.get(config.appLanguage,"crosswalk_occupied"), VoicePriority.SAFETY)
+            alert("scene_obstruction", "occupied", RoadText.get(config.appLanguage,"crosswalk_occupied"))
         } else if (alertsEnabled && risk?.reasons?.contains(RiskReason.OBSTACLE_AHEAD) == true) {
-            voz.falarEstado("scene_obstruction", "obstacle", RoadText.get(config.appLanguage,"obstacle_ahead"), VoicePriority.SAFETY)
+            alert("scene_obstruction", "obstacle", RoadText.get(config.appLanguage,"obstacle_ahead"))
         } else if (alertsEnabled && risk?.reasons?.contains(RiskReason.POTENTIAL_TRAFFIC_CONFLICT) == true) {
-            voz.falarEstado("scene_obstruction", "potential", RoadText.get(config.appLanguage,"traffic_potential"), VoicePriority.SAFETY)
+            alert("scene_obstruction", "potential", RoadText.get(config.appLanguage,"traffic_potential"))
         } else voz.observarEstado("scene_obstruction","absent",1500)
         if (alertsEnabled && conflicting != null) {
             aproximacaoAtiva = true
             val vehicle = veiculosReais[conflicting.trackId]
             val side = if ((vehicle?.cx ?: wf / 2f) < wf / 2f) "left" else "right"
-            voz.falarEstado("scene_approach","approaching_$side",RoadText.get(config.appLanguage,"approaching_$side"),VoicePriority.SAFETY)
+            alert("scene_approach","approaching_$side",RoadText.get(config.appLanguage,"approaching_$side"))
         } else if (voz.observarEstado("scene_approach","absent",1500)) {
             aproximacaoAtiva = false
         }
